@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Web Graph Engine — Playwright + Neo4j + Cytoscape.js</title>
+  <link rel="stylesheet" href="styles.css">
+  <!-- Cytoscape.js core & layout extensions -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.30.4/cytoscape.min.js"></script>
+</head>
+<body>
+  <div class="app-layout">
+    <!-- Top Navigation Header -->
+    <header class="topbar">
+      <div class="topbar-left">
+        <div class="brand">
+          <span class="brand-icon">🕸️</span>
+          <span class="brand-title">Web Graph Engine</span>
+          <span class="badge">Neo4j + Playwright</span>
+        </div>
+      </div>
+      <div class="topbar-right">
+        <div id="neo4j-status-pill" class="status-pill status-checking">
+          <span class="status-dot"></span>
+          <span id="neo4j-status-text">Checking Neo4j...</span>
+        </div>
+        <button id="btn-sync-neo4j" class="btn btn-secondary">
+          <span class="icon">🔄</span> Sync to Neo4j
+        </button>
+        <button id="btn-export-cypher" class="btn btn-outline">
+          <span class="icon">📄</span> Export Cypher (.cypher)
+        </button>
+      </div>
+    </header>
+
+    <div class="main-container">
+      <!-- Left Controls Sidebar -->
+      <aside class="sidebar">
+        <div class="panel">
+          <h2 class="panel-title">Explore Website</h2>
+          <div class="form-group">
+            <label for="input-url">Website URL</label>
+            <input type="url" id="input-url" value="" placeholder="https://example.com" />
+          </div>
+
+          <div class="grid-2">
+            <div class="form-group">
+              <label for="input-max-states">Max States</label>
+              <input type="number" id="input-max-states" value="15" min="2" max="100" />
+            </div>
+            <div class="form-group">
+              <label for="input-max-depth">Max Depth</label>
+              <input type="number" id="input-max-depth" value="3" min="1" max="10" />
+            </div>
+          </div>
+
+          <div class="form-check">
+            <input type="checkbox" id="check-headless" checked />
+            <label for="check-headless">Headless Browser</label>
+          </div>
+
+          <div class="form-check">
+            <input type="checkbox" id="check-screenshots" />
+            <label for="check-screenshots">Capture state screenshots</label>
+          </div>
+
+          <div class="action-buttons">
+            <button id="btn-start-crawl" class="btn btn-primary">
+              <span class="icon">▶</span> Start Graph Exploration
+            </button>
+            <button id="btn-stop-crawl" class="btn btn-danger" style="display: none;">
+              <span class="icon">⏹</span> Stop Explorer
+            </button>
+          </div>
+        </div>
+
+        <!-- Metrics Panel -->
+        <div class="panel">
+          <h2 class="panel-title">Graph Knowledge Base</h2>
+          <div class="metrics-grid">
+            <div class="metric-card">
+              <span class="metric-val" id="metric-pages">0</span>
+              <span class="metric-label">Pages</span>
+            </div>
+            <div class="metric-card">
+              <span class="metric-val" id="metric-states">0</span>
+              <span class="metric-label">UI States</span>
+            </div>
+            <div class="metric-card">
+              <span class="metric-val" id="metric-transitions">0</span>
+              <span class="metric-label">Transitions</span>
+            </div>
+            <div class="metric-card">
+              <span class="metric-val" id="metric-elements">0</span>
+              <span class="metric-label">Elements</span>
+            </div>
+            <div class="metric-card full-width">
+              <span class="metric-val" id="metric-workflows">0</span>
+              <span class="metric-label">Discovered Workflows</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Graph View Controls -->
+        <div class="panel">
+          <h2 class="panel-title">Visualization Controls</h2>
+          <div class="form-group">
+            <label>Graph Detail Level</label>
+            <select id="select-filter-mode">
+              <option value="states" selected>High-Level (Pages & UI States)</option>
+              <option value="full">Detailed (States + DOM Elements)</option>
+              <option value="pages">Sitemap</option>
+              <option value="workflows">Workflows Focus</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Graph Layout</label>
+            <select id="select-layout">
+              <option value="cose">CoSE (Force-directed physics)</option>
+              <option value="breadthfirst" selected>Top-down flow (Hierarchical)</option>
+              <option value="concentric">Concentric</option>
+              <option value="circle">Circle</option>
+              <option value="grid">Grid</option>
+            </select>
+          </div>
+          <button id="btn-fit-graph" class="btn btn-outline" style="width: 100%;">
+            Center & Fit Viewport
+          </button>
+        </div>
+      </aside>
+
+      <!-- Center Cytoscape Canvas -->
+      <section class="viewport-wrapper">
+        <div id="cy" class="cy-canvas"></div>
+
+        <!-- Legend Overlay -->
+        <div class="legend-card">
+          <div class="legend-item"><span class="legend-color legend-page"></span> Page / Route</div>
+          <div class="legend-item"><span class="legend-color legend-state"></span> Screen UIState</div>
+          <div class="legend-item"><span class="legend-color legend-modal"></span> Modal / Dialog</div>
+          <div class="legend-item"><span class="legend-color legend-element"></span> Element (Button/Input)</div>
+          <div class="legend-item"><span class="legend-color legend-transition"></span> Action Transition</div>
+        </div>
+
+        <!-- Bottom Log Drawer -->
+        <div class="log-drawer" id="log-drawer">
+          <div class="log-header" id="log-header">
+            <span>Terminal Live Activity (<span id="log-count">0</span> events)</span>
+            <span id="log-toggle-icon">▲</span>
+          </div>
+          <div class="log-body" id="log-container">
+            <div class="log-line info">[Engine] Ready to explore any website. Click "Start Graph Exploration".</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Right Inspector Panel -->
+      <aside class="inspector" id="inspector-panel">
+        <div class="inspector-header">
+          <h2 id="inspector-title">Entity Inspector</h2>
+          <span id="inspector-badge" class="badge">Select Node</span>
+        </div>
+        <div class="inspector-body" id="inspector-content">
+          <p class="placeholder-text">Click any node or transition in the graph to inspect its properties, landmarks, DOM state, or screenshot.</p>
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

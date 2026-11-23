@@ -1,0 +1,30 @@
+{
+  "name": "web-graph-engine",
+  "version": "1.0.0",
+  "description": "High-fidelity engine converting any website into an interactive state-and-action graph powered by Playwright, Neo4j, and Cytoscape.js",
+  "type": "module",
+  "main": "src/server/server.ts",
+  "scripts": {
+    "start": "tsx src/server/server.ts",
+    "dev": "tsx watch src/server/server.ts",
+    "crawl": "tsx src/cli.ts",
+    "build": "tsc",
+    "test": "tsx --test test/*.test.ts"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "neo4j-driver": "^5.28.1",
+    "playwright": "^1.50.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.10.7",
+    "@types/ws": "^8.5.14",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}
