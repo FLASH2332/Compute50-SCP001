@@ -1,0 +1,17 @@
+[project]
+name = "compute50-scp001"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "FLASH2332", email = "jayaveeran2005@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = []
+
+[project.scripts]
+compute50-scp001 = "compute50_scp001:main"
+
+[build-system]
+requires = ["uv_build>=0.12.13,<0.13.0"]
+build-backend = "uv_build"
