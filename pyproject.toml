@@ -7,7 +7,12 @@ authors = [
     { name = "FLASH2332", email = "jayaveeran2005@gmail.com" }
 ]
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "beautifulsoup4>=4.15.0",
+    "groq>=1.7.0",
+    "neo4j>=6.4.1",
+    "playwright>=1.65.2",
+]
 
 [project.scripts]
 compute50-scp001 = "compute50_scp001:main"
