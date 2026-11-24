@@ -13,7 +13,10 @@
     "agent": "tsx bench/agent/cli.ts",
     "bench:crawl": "tsx bench/crawl.ts",
     "bench:mcp": "tsx bench/mcp/server.ts",
-    "bench:typecheck": "tsc -p bench/tsconfig.json"
+    "bench:typecheck": "tsc -p bench/tsconfig.json",
+    "bench:crawl-all": "tsx bench/crawlAll.ts",
+    "bench:run": "tsx bench/run.ts",
+    "bench:report": "tsx bench/report.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.2",

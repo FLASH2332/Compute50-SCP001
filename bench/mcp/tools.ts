@@ -245,7 +245,8 @@ export class GraphTools {
   async whereAmI(): Promise<Props> {
     const url = this.browser?.url();
     if (!url || url === 'about:blank') return { browser: 'not opened yet; call open_page' };
-    return this.pageForUrl(url);
+    // The real URL too: on an unopened page of a URL template, page_id is the template's representative
+    return { url, ...(await this.pageForUrl(url)) };
   }
 
   async openPage(ref: string): Promise<Props> {

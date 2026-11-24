@@ -30,6 +30,8 @@ export interface Snapshot {
   createdAt: string;
   model: any;              // SectionGraphModel (+ optional extraNodes / extraEdges)
   metrics?: Record<string, unknown>;
+  commit?: string;         // git commit of the variant that crawled it
+  benchHash?: string;      // hash of bench/ code at crawl time (see hash.ts)
 }
 
 const NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
