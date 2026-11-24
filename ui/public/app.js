@@ -205,7 +205,7 @@ async function showRun(runId, keepJob = false) {
       s.audience ? h('span', { class: 'chip' }, `audience: ${s.audience}`) : null, s.version ? h('span', { class: 'chip' }, `version ${s.version}`) : null,
       h('span', { class: 'chip' }, `${d.takes.filter(t => t.ok).length}/${d.storyboard?.shots?.length ?? d.takes.length} shots recorded`)),
     d.video
-      ? h('div', { class: 'player' }, h('video', { src: d.video, controls: true, preload: 'metadata' }, d.outputs.some(o => o.name === 'demo.vtt') ? h('track', { kind: 'captions', src: d.outputs.find(o => o.name === 'demo.vtt').url, default: true, label: 'Captions' }) : null))
+      ? h('div', { class: 'player' }, h('video', { src: d.video, controls: true, preload: 'metadata' }, d.outputs.some(o => o.name === 'demo.vtt') ? h('track', { kind: 'captions', src: d.outputs.find(o => o.name === 'demo.vtt').url, label: 'Captions (also burned in)' }) : null))
       : h('div', { class: 'card' }, h('b', {}, 'No final video yet. '), s.phase === 'done' ? '' : `The run stopped at "${s.phase}". `, 'The recorded takes are below.',
           h('div', { class: 'row' }, h('button', { class: 'secondary', type: 'button', disabled: busy, onclick: async () => { try { follow(await api(`/api/runs/${runId}/resume`, {})); } catch (x) { alert(x.message); } } }, 'Continue this run'))),
     files.length ? h('div', { class: 'sect' }, h('h3', {}, 'Files'), h('div', { class: 'files' }, files.map(f => h('a', { href: f.url, target: '_blank', download: f.name.endsWith('.mp4') || f.name.endsWith('.gif') ? null : f.name }, f.name)))) : null,

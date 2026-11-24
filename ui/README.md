@@ -8,7 +8,8 @@ npx tsx ui/server.ts                         # → http://localhost:4300
 npm run fixture                              # optional: the local test site on http://127.0.0.1:5050
 ```
 
-FFmpeg must be on `PATH` (or set `FFMPEG_PATH` / `FFPROBE_PATH` in `.env`) for the final MP4. Without it the UI still
+FFmpeg must be on `PATH` (or set `FFMPEG_PATH` / `FFPROBE_PATH` in `.env`) for the final MP4. On Windows:
+`winget install Gyan.FFmpeg`, then open a new terminal so the new `PATH` is seen. Without it the UI still
 maps, plans, asks for approval and records; you can watch the recorded takes, then press **Continue this run** after
 installing FFmpeg and restarting the UI.
 
