@@ -13,6 +13,7 @@ import { SectionCrawler } from '../src/sections/sectionCrawler.js';
 import { SectionGraph } from '../src/sections/sectionGraph.js';
 import { config } from './config.js';
 import type { Snapshot } from './graph/load.js';
+import { benchHash } from './hash.js';
 
 export function currentVariant(): string {
   try {
@@ -22,8 +23,17 @@ export function currentVariant(): string {
   }
 }
 
+export function gitCommit(): string {
+  try {
+    return execSync('git rev-parse --short HEAD', { encoding: 'utf8' }).trim();
+  } catch {
+    return 'unknown';
+  }
+}
+
+/** BENCH_SNAPSHOTS points another checkout (e.g. a graph_base worktree) at the main checkout's snapshot folder. */
 export function snapshotPath(site: string, variant: string): string {
-  return path.resolve('bench', 'snapshots', site, variant, 'graph.json');
+  return path.resolve(process.env.BENCH_SNAPSHOTS || path.join('bench', 'snapshots'), site, variant, 'graph.json');
 }
 
 export async function crawlSite(opts: { site: string; url: string; pages: number; hops: number; variant: string; log?: (m: string) => void }): Promise<Snapshot> {
@@ -48,6 +58,7 @@ export async function crawlSite(opts: { site: string; url: string; pages: number
   const pages = Object.values<any>(model.pages);
   const snap: Snapshot = {
     site: opts.site, variant: opts.variant, createdAt: new Date().toISOString(), model,
+    commit: gitCommit(), benchHash: benchHash(),
     metrics: {
       crawlMs, error, maxPages: opts.pages, maxHops: opts.hops,
       pagesOpened: pages.filter(p => p.crawled).length,
