@@ -84,3 +84,52 @@ RTX 4060), so they are only a first signal:
 - **`docs/CODEBASE.md` describes the Python `graph` branch**, not this TypeScript engine.
 - **Still open:** confirm Compute 50's rules allow reusing our earlier SiteGraph code, and what disclosure they require.
 - **Snapshots and results are gitignored.** Each machine has to crawl again (`bench:crawl-all` on both branches).
+
+## `new_graph_base`: graph features built
+
+Ported from the old SiteGraph project, graph side only (details and the differences from the plan:
+[FEATURES.md](FEATURES.md), section "Built on `new_graph_base`"):
+
+| Feature | What it adds |
+| --- | --- |
+| A1.1 richer capture | ARIA role, accessible name, box, popup and modal state, clickable `<div>`s found from hints |
+| A1.2 locators | `locators[]` (role+name, test id, unique CSS, text), fingerprint, risk class |
+| A1.3 URL templates | `Template` nodes, `urlTemplate` on pages, `urlPattern` for unopened pages; 3 pages per template before look-alikes |
+| A1.4 list templates | one action per list of 4+ items, with count, sample texts and an `item=` locator |
+| A1.8 edge cost | reliability and routing cost on actions, links and recorded clicks |
+| A3.1 site bootstrap | robots.txt, sitemap size and one model call → `App` node; its skip patterns feed the crawler |
+| A3.2 algorithms | PageRank, betweenness, harmonic, communities, `reachable`, `deadEnd` |
+| A3.4 areas | `Area` nodes named by the model (or after their top page) |
+| A3.5 / A3.6 | frontier groups and brute / guided / auto exploration |
+
+**Code:**
+- `src/sections/`: `templates.ts`, `frontier.ts`, `algorithms.ts`, `bootstrap.ts`, `enrich.ts`, and changes to
+  `sectionExtractor.ts` and `sectionCrawler.ts`.
+- `src/llm.ts`: the model client for graph building.
+
+**Tests:** `test/graphFeatures.test.ts` (7 tests), plus the teammate's 12, which still pass. One assertion changed:
+the events list now also has its list-template action.
+
+**Seen in the crawls:**
+- **Guided exploration** ran on quotes and the-internet. On quotes the model chose to skip 20 author pages. The
+  `quotes-neruda` task shows whether that hurts.
+- **Areas** follow the categories on books ("Mystery Section", "Romance Library", …).
+
+### Pending on `new_graph_base`
+
+- **Not ported** (outside the graph-only scope):
+  - healing: A1.5–A1.7 (resolver, locator hit counts, re-plan)
+  - demo and recording: A1.9–A1.12
+  - `demo_score` (A3.3)
+  - the MCP server with elicitation (A3.7)
+  - every Part B feature (demo, onboarding, healing)
+- **Simplified:**
+  - Clickables are found from attribute and style hints only; there is no DevTools event-listener scan.
+  - There is no goal-directed exploration (the old `explore_toward`).
+- **Areas are rebuilt on every crawl.** Their `status` is always `active`, because no older graph is kept to mark
+  areas `stale`.
+- **Risks to watch in the results:**
+  - A `urlPattern` maps an unopened page to its template's representative page (the tools say `matched_by: url
+    pattern`).
+  - A model's skip patterns can drop useful pages. There are guards: a pattern that would drop more than half the
+    queue is ignored, and a "stop" counts only after half the page budget is used.
