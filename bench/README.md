@@ -88,3 +88,39 @@ rename or remove:
 
 The crawler is called as `new SectionCrawler(config, graph).start()`, with the config `crawl.ts` passes; a variant must
 keep that entry point.
+
+## Benchmark suite
+
+18 tasks (9 categories × 2) on 7 sites, each with an automatic check. One session runs every task once per variant.
+
+| File | What it does |
+| --- | --- |
+| `sites.ts` | The sites and their crawl budget; local ones (`test-site`, `sites/fixture`) are served while needed |
+| `crawlAll.ts` | Crawls every site for the checkout's variant (run once per variant) |
+| `tasks.ts` | The tasks, their category and check; `quick: true` marks the 9-task subset |
+| `check.ts` | Pass/fail plus a failure kind (budget, wrong-page, no-action, wrong-answer, gave-up, invented) |
+| `run.ts` | A session: alternates which variant goes first, fresh MCP server and browser per run, resumable |
+| `report.ts` | Pools all sessions into `report/report.md` |
+| `hash.ts` | Hash of the harness code, stored in snapshots and runs |
+| `sites/fixture/` | The old SiteGraph fixture shop, plus `start.html` linking its pages that index.html does not |
+
+Categories: `nav`, `list-item`, `deep`, `pagination`, `click`, `form`, `fact`, `unseen`, `impossible`.
+
+```bash
+# 1. Crawl once per variant (snapshots are gitignored). In the new_graph_base checkout:
+npm run bench:crawl-all
+# ...and in a graph_base checkout (e.g. a worktree), writing into the same snapshot folder:
+git worktree add .worktrees/graph_base graph_base        # once
+cd .worktrees/graph_base && BENCH_SNAPSHOTS=../../bench/snapshots npm run bench:crawl-all
+
+# 2. Run sessions (about 25-30 min for all 18 tasks on a local 9B model; --quick: 9 tasks, about half that)
+npm run bench:run
+npm run bench:run -- --quick
+npm run bench:run -- --resume <session id>
+
+# 3. Report over every session so far
+npm run bench:report
+```
+
+A session stops if the two variants' snapshots of a site were crawled by different harness code (`benchHash`).
+Results: `results/sessions/<session>.jsonl` (one line per run) and `results/sessions/<session>/` (every tool call).
