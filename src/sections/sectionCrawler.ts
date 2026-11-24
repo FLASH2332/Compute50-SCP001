@@ -7,6 +7,17 @@ import type { SectionGraph } from './sectionGraph.js';
 import type { SectionCrawlConfig, SectionCrawlEvent, SitePage } from './types.js';
 import { nextPageButton, pressNextPage } from './pagination.js';
 import { clickCandidates, preventFormSubmission, probeClicks } from './interactions.js';
+import { connectGraphLlm } from '../llm.js';
+import { bootstrapSite, type Bootstrap } from './bootstrap.js';
+import { FRONTIER_SYSTEM, frontierPrompt, groupFrontier, parseChoice, pickIndex, templateOf } from './frontier.js';
+import { enrichModel } from './enrich.js';
+import { isVariable } from './templates.js';
+
+const GUIDED_ROUND_PAGES = 10;  // pages opened per guided round (old SiteGraph: 10 new states)
+const GUIDED_MAX_ROUNDS = 12;
+const AUTO_PROBE_PAGES = 8;     // auto mode: pages opened breadth first before deciding
+const AUTO_MAX_GROUPS = 15;     // ... then guided if more frontier groups than this are still open
+const AUTO_LARGE_SITEMAP = 300;
 
 const SKIP_EXT = /\.(pdf|zip|gz|rar|7z|exe|dmg|msi|jpe?g|png|gif|svg|webp|ico|mp4|mp3|mov|avi|csv|xlsx?|docx?|pptx?|json|xml|rss)$/i;
 
@@ -16,7 +27,7 @@ export function pageIdOf(url: string): string {
   return normalizeUrl(url).canonicalUrl + (/^#(?:\/|!)/.test(fragment) ? fragment : '');
 }
 
-type Target = { id: string; url: string; depth: number; next?: boolean; pagination?: SitePage['pagination'] };
+type Target = { id: string; url: string; depth: number; next?: boolean; label?: string; pagination?: SitePage['pagination'] };
 
 /**
  * Opens pages one by one (breadth first) and records each page's sections and
@@ -49,6 +60,9 @@ export class SectionCrawler extends EventEmitter {
       probeClicks: config.probeClicks === true && config.readOnly === true,
       maxProbePages: config.maxProbePages ?? 3,
       maxClicksPerPage: config.maxClicksPerPage ?? 6,
+      explore: config.explore ?? 'auto',
+      templateCap: config.templateCap ?? 3,
+      useLlm: config.useLlm ?? true,
       allowedDomains: config.allowedDomains?.length ? config.allowedDomains : [host]
     };
   }
@@ -99,14 +113,91 @@ export class SectionCrawler extends EventEmitter {
       let blocked = false;
       let followedNext = false;
 
-      while ((queue.length || paginationQueue.length) && crawled < maxPages && this.running) {
+      // Exploration mode (old SiteGraph brute / guided / auto). Look-alike pages (one URL template) are opened
+      // `templateCap` at a time; the rest wait until nothing else is left.
+      const llm = this.config.useLlm ? await connectGraphLlm() : undefined;
+      if (llm) this.log('A model is available: the site profile, guided picks and area names use it');
+      let mode: 'brute' | 'guided' = this.config.explore === 'guided' && llm ? 'guided' : 'brute';
+      let decided = this.config.explore !== 'auto' || !llm;
+      const opened = new Map<string, number>();
+      const skip: RegExp[] = [];
+      let preferred: Set<string> | undefined;
+      let roundLeft = 0;
+      const stats = { rounds: 0, skipped: 0, deferred: 0 };
+      let boot: Bootstrap | undefined;
+      let stopAsked = false;
+
+      // Drops queued targets that match a skip pattern. A pattern that would drop more than half the queue
+      // (or the start page) is ignored: a model's skip list must not end the crawl.
+      const applySkip = (patterns: { pattern: string; reason: string }[]) => {
+        for (const { pattern, reason } of patterns) {
+          const re = new RegExp(pattern, 'i');
+          if (re.test(startUrl)) continue;
+          const hits = queue.filter(t => re.test(t.url));
+          if (queue.length >= 4 && hits.length > queue.length / 2) continue;
+          skip.push(re);
+          for (const t of hits) queue.splice(queue.indexOf(t), 1);
+          stats.skipped += hits.length;
+          if (hits.length) this.log(`Skipping ${hits.length} page(s) matching /${pattern}/ (${reason || 'no reason given'})`);
+        }
+      };
+      const guidedRound = async () => {
+        stats.rounds++;
+        roundLeft = GUIDED_ROUND_PAGES;
+        const { groups, members } = groupFrontier(queue);
+        const mapped = [...opened.entries()].map(([k, n]) => (n > 1 ? `${k} x${n}` : k)).join(', ');
+        const answer = await llm!.json(FRONTIER_SYSTEM, frontierPrompt(groups, boot?.profile?.purpose, mapped, maxPages - crawled), 600);
+        const choice = parseChoice(answer, groups);
+        if (!choice.ok) { preferred = undefined; this.log('Guided round: no usable answer, breadth first'); return; }
+        preferred = new Set(choice.pick.flatMap(id => (members.get(id) ?? []).map(templateOf)));
+        applySkip(choice.skip);
+        // A stop is honoured only after half the page budget, so one early answer can't end the map
+        if (choice.stop && crawled >= maxPages / 2) stopAsked = true;
+        this.log(`Guided round ${stats.rounds}: open ${choice.pick.join(', ') || 'nothing in particular'}${choice.skip.length ? `; skip ${choice.skip.length} pattern(s)` : ''}${choice.stop ? '; the model says the map is good enough' : ''}`);
+      };
+      const decide = (why: string, guided: boolean) => {
+        decided = true;
+        if (guided) { mode = 'guided'; roundLeft = 0; }
+        this.log(`Exploration mode: ${mode} (${why})`);
+      };
+
+      while ((queue.length || paginationQueue.length) && crawled < maxPages && this.running && !stopAsked) {
         // Alternate pagination with normal navigation so catalog links do not
         // bury the Next chain and a long Next chain does not bury the site.
-        const target: Target = ((!followedNext || !queue.length) && paginationQueue.shift()) || queue.shift()!;
+        let target: Target;
+        if ((!followedNext || !queue.length) && paginationQueue.length) target = paginationQueue.shift()!;
+        else {
+          if (mode === 'guided' && roundLeft <= 0 && stats.rounds < GUIDED_MAX_ROUNDS && queue.length > 1) await guidedRound();
+          const i = pickIndex(queue, opened, this.config.templateCap, mode === 'guided' ? preferred : undefined);
+          const k = templateOf(queue[i]);
+          if (isVariable(k) && (opened.get(k) ?? 0) >= this.config.templateCap) stats.deferred++;
+          target = queue.splice(i, 1)[0];
+          roundLeft--;
+        }
         followedNext = target.next === true;
         const { url, depth } = target;
         const result = await this.crawlPage(page, target);
         crawled++;
+        opened.set(templateOf(target), (opened.get(templateOf(target)) ?? 0) + 1);
+        if (crawled === 1 && result !== 'bot-check' && this.running) {
+          const model = this.graph.getModel();
+          const first = Object.values(model.pages).find(p => p.crawled);
+          boot = await bootstrapSite(startUrl, first?.title ?? '', Object.values(model.actions), llm);
+          if (boot.profile) {
+            this.log(`Site profile: ${boot.profile.purpose} (size ${boot.profile.size})`);
+            if (Array.isArray(result)) {
+              const pats = boot.profile.skip.map(s => new RegExp(s.pattern, 'i'));
+              const keep = result.filter(t => !pats.some(re => re.test(t.url)));
+              if (keep.length >= result.length / 2) {
+                stats.skipped += result.length - keep.length;
+                result.splice(0, result.length, ...keep);
+                skip.push(...pats);
+              }
+            }
+          }
+          if (!decided && (boot.profile?.size === 'large' || (boot.sitemapUrls ?? 0) > AUTO_LARGE_SITEMAP))
+            decide(boot.profile?.size === 'large' ? 'the site profile says large' : `the sitemap lists ${boot.sitemapUrls} URLs`, true);
+        }
         if (result === 'bot-check') {
           blocked = true;
           this.emitEvent({ type: 'error', timestamp: new Date().toISOString(), data: { error: `This site showed a bot-protection check on ${url}. The crawler does not bypass these, so crawling stopped. The graph has the ${crawled - 1} page(s) read before the block.` } });
@@ -116,7 +207,12 @@ export class SectionCrawler extends EventEmitter {
         for (const target of result) {
           if (queued.has(target.id)) continue;
           queued.add(target.id);
+          if (skip.some(re => re.test(target.url))) { stats.skipped++; continue; }
           (this.config.readOnly && target.next ? paginationQueue : queue).push(target);
+        }
+        if (!decided && crawled >= AUTO_PROBE_PAGES) {
+          const groups = groupFrontier(queue).groups.length;
+          decide(`${groups} frontier groups open after ${crawled} pages`, groups > AUTO_MAX_GROUPS);
         }
         if (queue.length || paginationQueue.length) await page.waitForTimeout(400); // be polite between pages
       }
@@ -127,6 +223,11 @@ export class SectionCrawler extends EventEmitter {
         remaining: pending,
         reason: blocked ? 'blocked' : !this.running ? 'stopped' : queue.length || paginationQueue.length ? 'page limit' : pending ? 'depth limit' : 'frontier exhausted'
       };
+      if (!decided) decide('the crawl ended before the probe', false);
+      if (this.running) {
+        await enrichModel(model, { llm, isSameSite: this.isSameSite, bootstrap: boot, log: m => this.log(m) });
+        model.buildStats = { llmCalls: llm?.calls ?? 0, mode, rounds: stats.rounds, skipped: stats.skipped, deferred: stats.deferred, profile: !!boot?.profile };
+      }
       if (this.running && !blocked) {
         const s = this.graph.stats();
         this.emitEvent({ type: 'complete', timestamp: new Date().toISOString(), data: { pages: s.pagesCount, sections: s.sectionsCount, actions: s.actionsCount } });
@@ -201,7 +302,7 @@ export class SectionCrawler extends EventEmitter {
       if (targetId === finalId || (pagination && targetId === pageIdOf(finalUrl))) continue;
       this.graph.addLinkedPage(targetId, target.href, depth + 1);
       if (!next.has(targetId) || link.next) {
-        next.set(targetId, { id: targetId, url: target.href, depth: depth + 1, next: link.next });
+        next.set(targetId, { id: targetId, url: target.href, depth: depth + 1, next: link.next, label: link.label });
         this.graph.addLink({ source: finalId, target: targetId, ...link });
       }
     }

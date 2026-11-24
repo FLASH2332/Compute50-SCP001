@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import type { Page as PlaywrightPage } from 'playwright';
 import type { ActionType, PageSection, SectionAction, SectionRole } from './types.js';
+import { classifyRisk, urlTemplate } from './templates.js';
 
 /** Raw data read from the page (in the browser). */
 interface RawAction {
@@ -13,6 +14,19 @@ interface RawAction {
   path: string;             // tag.class chain of the 3 nearest ancestors (structure)
   itemKey?: string;         // set when inside a repeated card/row: item signature + position in item
   itemId?: number;          // which copy of the repeated item (to drop image+title duplicates)
+  // Richer capture (ported from the old SiteGraph extract.js)
+  role: string;             // ARIA role, explicit or implicit
+  name: string;             // accessible name
+  tag: string;
+  css: string;              // unique CSS path
+  gcss: string;             // generic CSS path (no ids, no positions): the same for look-alike elements
+  testid?: string;
+  bbox: number[];           // x, y, width, height (page coordinates)
+  inferred?: boolean;       // no role, but clickable (click handler, tabindex, btn class, pointer cursor)
+  hoverable?: boolean;      // opens a popup / submenu
+  attrs: Record<string, string | null>;
+  itemPrimary?: boolean;    // the link of a repeated item that carries its text (list templates)
+  itemText?: string;
 }
 interface RawRegion {
   positionPct: number;
@@ -24,6 +38,7 @@ interface RawRegion {
   heading: string;
   className: string;
   hidden: boolean;
+  modal?: boolean;
   actions: RawAction[];
 }
 
@@ -154,6 +169,138 @@ export async function readPageRegions(page: PlaywrightPage): Promise<ExtractedPa
       return { type: 'button' };
     };
 
+    // --- Richer capture (ported from the old SiteGraph extract.js) ---
+    const implicitRole = (el: Element): string => {
+      const explicit = el.getAttribute('role');
+      if (explicit) return explicit.split(/\s+/)[0];
+      const t = el.tagName.toLowerCase();
+      const type = (el.getAttribute('type') || '').toLowerCase();
+      if (t === 'a') return el.hasAttribute('href') ? 'link' : 'generic';
+      if (t === 'button' || t === 'summary') return 'button';
+      if (t === 'input') {
+        if (['button', 'submit', 'reset', 'image'].includes(type)) return 'button';
+        if (type === 'checkbox') return 'checkbox';
+        if (type === 'radio') return 'radio';
+        if (type === 'search') return 'searchbox';
+        if (type === 'range') return 'slider';
+        if (type === 'number') return 'spinbutton';
+        return 'textbox';
+      }
+      if (t === 'select') return (el as HTMLSelectElement).multiple ? 'listbox' : 'combobox';
+      if (t === 'textarea') return 'textbox';
+      return 'button';
+    };
+    const textOf = (el: Element) => ((el as HTMLElement).innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+    const accName = (el: Element): string => {
+      const al = el.getAttribute('aria-label');
+      if (al && al.trim()) return al.trim();
+      const lb = el.getAttribute('aria-labelledby');
+      if (lb) {
+        const t = lb.split(/\s+/).map(id => { const n = document.getElementById(id); return n ? textOf(n) : ''; }).join(' ').trim();
+        if (t) return t;
+      }
+      const labels = (el as HTMLInputElement).labels;
+      if (labels && labels.length) return textOf(labels[0]);
+      const t = el.tagName.toLowerCase();
+      if (t === 'input' || t === 'textarea' || t === 'select') {
+        const type = (el.getAttribute('type') || '').toLowerCase();
+        if (['submit', 'button', 'reset'].includes(type) && (el as HTMLInputElement).value) return (el as HTMLInputElement).value.trim();
+        return (el.getAttribute('placeholder') || el.getAttribute('title') || el.getAttribute('name') || '').trim();
+      }
+      const text = textOf(el).slice(0, 300);
+      if (text) return text;
+      const alt = el.querySelector('img[alt]')?.getAttribute('alt');
+      return (alt || el.getAttribute('title') || '').trim();
+    };
+    const STATEFUL = /\d{3,}|active|open|selected|hover|focus|current|show|visible|expanded|collapsed/i;
+    const cssSeg = (el: Element, generic: boolean): string => {
+      const t = CSS.escape(el.tagName.toLowerCase());
+      if (!generic && el.id && !/\d{3,}/.test(el.id)) return t + '#' + CSS.escape(el.id);
+      const cls = [...el.classList].filter(c => !STATEFUL.test(c)).slice(0, 2).map(c => '.' + CSS.escape(c)).join('');
+      if (generic) return t + cls;
+      const sibs = el.parentElement ? [...el.parentElement.children].filter(s => s.tagName === el.tagName) : [];
+      return t + cls + (sibs.length > 1 ? `:nth-of-type(${sibs.indexOf(el) + 1})` : '');
+    };
+    const cssPath = (el: Element, generic: boolean): string => {
+      const segs: string[] = [];
+      for (let n: Element | null = el; n && n !== document.documentElement && n !== document.body; n = n.parentElement) {
+        const s = cssSeg(n, generic);
+        segs.unshift(s);
+        if (!generic && s.includes('#')) break;
+      }
+      return segs.join(' > ') || el.tagName.toLowerCase();
+    };
+    const uniqueCss = (el: Element): string => {
+      const css = cssPath(el, false);
+      try { if (document.querySelectorAll(css).length === 1) return css; } catch { /* fall through */ }
+      const parts: string[] = [];
+      for (let n: Element | null = el; n && n !== document.documentElement; n = n.parentElement) {
+        let index = 1;
+        for (let prev = n.previousElementSibling; prev; prev = prev.previousElementSibling) if (prev.localName === n.localName) index++;
+        parts.unshift(CSS.escape(n.localName) + ':nth-of-type(' + index + ')');
+      }
+      return parts.join(' > ');
+    };
+    const hasHiddenPopup = (el: Element) => {
+      const hp = el.getAttribute('aria-haspopup');
+      if (hp && hp !== 'false') return true;
+      const p = el.parentElement;
+      if (!p) return false;
+      const sub = p.querySelector(':scope > ul, :scope > [role="menu"], :scope > [class*="dropdown"], :scope > [class*="submenu"], :scope > [class*="sub-menu"]');
+      return !!sub && sub !== el && !visible(sub);
+    };
+    const isModal = (el: Element) => {
+      if (el.getAttribute('aria-modal') === 'true') return true;
+      try { return el.tagName === 'DIALOG' && el.matches(':modal'); } catch { return false; }
+    };
+    // Clickable elements with no role (a <div onclick>, a framework-rendered button): click-handler attributes,
+    // tabindex, a btn/button class, or a pointer cursor that starts on this element. A wrapper that holds a real
+    // control, a page-sized box or an element with no name is not one.
+    const NOT_CLICKABLE = new Set(['HTML', 'BODY', 'HEAD', 'SCRIPT', 'STYLE', 'NOSCRIPT', 'BR', 'HR', 'LABEL', 'IMG', 'OPTION', 'IFRAME']);
+    const inferClickables = (): Set<Element> => {
+      const out = new Set<Element>();
+      const everything = document.body ? Array.from(document.body.querySelectorAll('*')).slice(0, 8000) : [];
+      const hint = (el: Element) => {
+        if (el.hasAttribute('onclick') || el.hasAttribute('onmousedown') || el.hasAttribute('onmouseup')) return true;
+        const ti = el.getAttribute('tabindex');
+        if (ti !== null && ti !== '-1') return true;
+        if (typeof el.className === 'string' && /(^|[\s_-])(btn|button)([\s_-]|$)/i.test(el.className)) return true;
+        if (getComputedStyle(el).cursor === 'pointer') {
+          const p = el.parentElement;
+          return !p || getComputedStyle(p).cursor !== 'pointer';
+        }
+        return false;
+      };
+      for (const el of everything) {
+        if (NOT_CLICKABLE.has(el.tagName) || el instanceof SVGElement || el.hasAttribute('role')) continue;
+        if (el.matches(ACTION) || el.closest(ACTION) || el.closest('label, [aria-hidden="true"]')) continue;
+        if (!hint(el) || !visible(el)) continue;
+        out.add(el);
+      }
+      if (!out.size) return out;
+      const area = Math.max(1, innerWidth * innerHeight);
+      for (const el of [...out]) {
+        const r = el.getBoundingClientRect();
+        const holds = !!el.querySelector(ACTION) || [...out].some(o => o !== el && el.contains(o));
+        if (holds || r.width * r.height > 0.6 * area || !textOf(el) && !el.getAttribute('aria-label') && !el.getAttribute('title')) out.delete(el);
+      }
+      return out;
+    };
+    const inferredEls = inferClickables();
+    // The link of a repeated item that carries its text (the title link, not the image link)
+    const primaryLinks = new Map<Element, Element | null>();
+    const primaryLinkOf = (item: Element): Element | null => {
+      if (!primaryLinks.has(item)) {
+        let best: Element | null = null, len = 0;
+        for (const a of Array.from(item.querySelectorAll('a[href]'))) {
+          const l = (a.textContent || '').replace(/\s+/g, ' ').trim().length;
+          if (l > len) { best = a; len = l; }
+        }
+        primaryLinks.set(item, best);
+      }
+      return primaryLinks.get(item)!;
+    };
+
     // 1. Regions
     const regionEls: Element[] = [];
     document.querySelectorAll(REGION).forEach(el => { if (roleOf(el)) regionEls.push(el); });
@@ -181,7 +328,7 @@ export async function readPageRegions(page: PlaywrightPage): Promise<ExtractedPa
     // class) and holds more than this one control (an image, other controls or
     // extra text). Product cards and story rows qualify; plain menus don't.
     const itemIds = new Map<Element, number>();
-    const repeatedItem = (el: Element, stop: Element | null): { key: string; id: number } | null => {
+    const repeatedItem = (el: Element, stop: Element | null): { key: string; id: number; el: Element } | null => {
       let a: Element | null = el.parentElement;
       for (let depth = 0; a && a !== stop && a !== document.body && depth < 6; depth++, a = a.parentElement) {
         const parent = a.parentElement;
@@ -198,17 +345,23 @@ export async function readPageRegions(page: PlaywrightPage): Promise<ExtractedPa
           pos = `${n.tagName.toLowerCase()}:${same.indexOf(n) + 1}` + (pos ? '>' + pos : '');
         }
         if (!itemIds.has(a)) itemIds.set(a, itemIds.size + 1);
-        return { key: `${a.tagName.toLowerCase()}.${cls.trim().split(/\s+/).slice(0, 2).join('.')}|${pos}`, id: itemIds.get(a)! };
+        return { key: `${a.tagName.toLowerCase()}.${cls.trim().split(/\s+/).slice(0, 2).join('.')}|${pos}`, id: itemIds.get(a)!, el: a };
       }
       return null;
     };
     const fallbackRole = new Map<Element, string>();
 
     // 2. Actions, each assigned to its nearest region
-    document.querySelectorAll(ACTION).forEach(el => {
+    const actionEls: Element[] = Array.from(document.querySelectorAll(ACTION));
+    if (inferredEls.size) {
+      actionEls.push(...inferredEls);
+      actionEls.sort((a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1));
+    }
+    actionEls.forEach(el => {
       if (el.closest('[aria-hidden="true"]') && !el.closest('dialog, [role="dialog"]')) return;
       if ((el as HTMLButtonElement).disabled) return;
-      const kind = typeOf(el);
+      const inferred = inferredEls.has(el);
+      const kind = inferred ? { type: 'button' } : typeOf(el);
       if (!kind) return;
       let owner: Element | null = el.parentElement;
       while (owner && !regionSet.has(owner)) owner = owner.parentElement;
@@ -226,7 +379,17 @@ export async function readPageRegions(page: PlaywrightPage): Promise<ExtractedPa
       }
       const list = byRegion.get(owner) || [];
       const item = repeatedItem(el, owner);
-      list.push({ label, type: kind.type as any, inputType: kind.inputType, selector: selectorOf(el, label), href, visible: visible(el), path: pathOf(el), itemKey: item?.key, itemId: item?.id });
+      const rect = el.getBoundingClientRect();
+      const primary = !!item && kind.type === 'link' && primaryLinkOf(item.el) === el;
+      list.push({
+        label, type: kind.type as any, inputType: kind.inputType, selector: selectorOf(el, label), href, visible: visible(el), path: pathOf(el), itemKey: item?.key, itemId: item?.id,
+        role: inferred ? 'button' : implicitRole(el), name: clean(inferred ? textOf(el) || el.getAttribute('aria-label') || el.getAttribute('title') : accName(el), 200),
+        tag: el.tagName.toLowerCase(), css: uniqueCss(el), gcss: cssPath(el, true), testid: el.getAttribute('data-testid') || el.getAttribute('data-test') || undefined,
+        bbox: [Math.round(rect.x + scrollX), Math.round(rect.y + scrollY), Math.round(rect.width), Math.round(rect.height)],
+        inferred: inferred || undefined, hoverable: hasHiddenPopup(el) || undefined,
+        attrs: { id: el.id || null, class: typeof el.className === 'string' && el.className ? el.className.slice(0, 120) : null, name: el.getAttribute('name'), placeholder: el.getAttribute('placeholder') },
+        itemPrimary: primary || undefined, itemText: primary ? clean(el.textContent, 100) : undefined,
+      });
       byRegion.set(owner, list);
     });
 
@@ -276,6 +439,7 @@ export async function readPageRegions(page: PlaywrightPage): Promise<ExtractedPa
         || (el.tagName === 'FORM' ? clean(el.closest('section, article, aside, dialog')?.querySelector('h1, h2, h3, h4')?.textContent, 50) : ''),
       className: clean(typeof el.className === 'string' ? el.className.split(/\s+/)[0] : '', 50),
       hidden: !visible(el),
+      modal: isModal(el) || undefined,
       actions: byRegion.get(el) || []
     }));
     const namedControls = new Set(candidates.filter(region => region.actions.length > 0)
@@ -313,6 +477,30 @@ const hash = (s: string) => crypto.createHash('sha256').update(s).digest('hex').
  */
 const GROUP_MIN = 6;
 const GROUP_KEEP = 3;
+const LIST_MIN = 4;          // items needed for a list template (old SiteGraph: 4)
+const LIST_SAMPLES = 30;
+
+const ROLE_LOCATABLE = new Set(['link', 'button', 'checkbox', 'radio', 'textbox', 'searchbox', 'combobox', 'listbox',
+  'tab', 'menuitem', 'menuitemcheckbox', 'menuitemradio', 'option', 'switch', 'slider', 'spinbutton']);
+
+/** Locators (most stable first), risk class, fingerprint and href template of one captured action. */
+function richFields(a: RawAction, isSameSite: (url: string) => boolean): Partial<SectionAction> {
+  const locators: string[] = [];
+  if (a.name && ROLE_LOCATABLE.has(a.role) && a.name.length <= 100) locators.push(`role=${a.role}|name=${a.name}`);
+  if (a.testid) locators.push(`testid=${a.testid}`);
+  if (a.css) locators.push(`css=${a.css}`);
+  if (a.name && (a.role === 'link' || a.role === 'button') && a.name.length <= 80) locators.push(`text=${a.name}`);
+  return {
+    role: a.role,
+    name: a.name || undefined,
+    locators,
+    fingerprint: { role: a.role, name: a.name, tag: a.tag, attrs: a.attrs, gcss: a.gcss, css: a.css, bbox: a.bbox },
+    risk: classifyRisk(a.role, a.name || a.label, a.href, isSameSite),
+    inferred: a.inferred,
+    hoverable: a.hoverable,
+    hrefTemplate: a.href && /^https?:/i.test(a.href) ? urlTemplate(a.href) : undefined,
+  };
+}
 function hrefTemplate(href: string): string | null {
   try {
     const u = new URL(href);
@@ -404,7 +592,38 @@ export function buildSections(pageId: string, regions: RawRegion[], isSameSite: 
         navigatesTo: internal ? canonical(a.href!) : undefined,
         external: a.href && /^https?:/i.test(a.href) ? !internal : undefined,
         visible: a.visible,
-        groupSize: groupSizeOf.get(a)
+        groupSize: groupSizeOf.get(a),
+        ...richFields(a, isSameSite)
+      });
+    }
+
+    // 3. List templates: 4 or more look-alike items (same card/row structure, the same spot in each) become one
+    //    action that stands for all of them, with a count, sample item texts and an item= locator.
+    const byItemLink = new Map<string, RawAction[]>();
+    for (const a of region.actions) {
+      if (!a.itemPrimary || !a.itemText || !a.href) continue;
+      byItemLink.set(a.gcss, [...(byItemLink.get(a.gcss) ?? []), a]);
+    }
+    for (const [gcss, items] of byItemLink) {
+      const distinct = [...new Map(items.map(a => [a.itemId, a])).values()];
+      if (distinct.length < LIST_MIN) continue;
+      const templates = new Set(distinct.map(a => urlTemplate(a.href!)));
+      const samples = [...new Set(distinct.map(a => a.itemText!))];
+      actions.push({
+        id: 'act_' + hash(`${sectionId}|template|${gcss}`),
+        sectionId,
+        label: `One of ${distinct.length} items (${samples.slice(0, 2).map(t => t.slice(0, 30)).join(', ')}, …)`,
+        type: 'link',
+        selector: gcss,
+        visible: distinct.some(a => a.visible),
+        role: 'link',
+        name: '<item>',
+        locators: ['item=' + gcss],
+        risk: 'navigate',
+        hrefTemplate: templates.size === 1 ? [...templates][0] : undefined,
+        isTemplate: true,
+        count: distinct.length,
+        samples: samples.slice(0, LIST_SAMPLES).map(t => t.slice(0, 80)),
       });
     }
 
@@ -418,6 +637,7 @@ export function buildSections(pageId: string, regions: RawRegion[], isSameSite: 
       regionSelector: region.regionSelector,
       order,
       hidden: region.hidden,
+      modal: region.modal,
       actionCount: kept.length,
       totalActions: list.length,
       summary: summarize(region.role, kept, list.length)

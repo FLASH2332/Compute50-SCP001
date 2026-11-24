@@ -26,6 +26,46 @@ checked against `D:\BrowserAgent_FullCode\BrowserAutomation_Agent\src\sitegraph\
 Round 1 closes tomorrow, so the ten promoted features are **F**: they are added after the thin slice works, not
 instead of it.
 
+## Built on `new_graph_base` (graph features only)
+
+`new_graph_base` is the TypeScript engine (`graph_base`) plus the graph-side features below, so the benchmark in
+`bench/` can show whether they help. Healing, onboarding and demo features (A1.5–A1.7, A1.9–A1.12, A3.3, Part B) are
+not on it. The plan below assumed the Python prototype; the TypeScript port differs where noted.
+
+| # | Where | What it adds to the graph |
+| --- | --- | --- |
+| A1.1 | `src/sections/sectionExtractor.ts` | Per action: ARIA role, accessible name, box, `hoverable` (popup/submenu), `modal` dialogs, and inferred clickables (`<div onclick>`, pointer cursor, tabindex, btn class) as buttons. No DevTools listener scan: attribute and style hints only |
+| A1.2 | `sectionExtractor.ts` (`richFields`) | `locators[]`: `role=…\|name=…`, `testid=`, `css=` (checked unique on the page), `text=`; `fingerprint`; `risk` (`templates.ts`). `selector` is unchanged |
+| A1.3 | `templates.ts`, `enrich.ts`, crawler | `Page.urlTemplate`; `(:Template)` nodes with `INSTANCE_OF`; `urlPattern` on one opened page per template (3+ pages, with a fixed path part); the crawler opens 3 pages per template before look-alikes |
+| A1.4 | `sectionExtractor.ts` | A list of 4+ look-alike items gets one extra action: `isTemplate`, `count`, `samples`, `item=<css>` locator. The teammate's 3 grouped examples stay |
+| A1.8 | `enrich.ts` | `reliability = (s+1)/(n+2)` and `cost = 1 + 2·(−ln r) + risk cost` on actions, links and recorded clicks |
+| A3.1 | `bootstrap.ts` | robots.txt, sitemap size, one model call → `(:App)-[:STARTS_AT]->(:Page)`; profile `skip` patterns feed the crawler |
+| A3.2 | `algorithms.ts`, `enrich.ts` | `pagerank`, `betweenness`, `harmonic`, `community`, `reachable`, `deadEnd` on pages |
+| A3.4 | `enrich.ts` | `(:Area {name, summary, size, medoid, status})-[:CONTAINS]->(:Page)`, `(:App)-[:HAS_AREA]->(:Area)` |
+| A3.5 | `frontier.ts` | The crawl queue grouped by URL template; `parseChoice` drops unknown ids and bad regexes |
+| A3.6 | `sectionCrawler.ts` | `explore: 'brute' \| 'guided' \| 'auto'` (default `auto`); thresholds as in the old code |
+
+Differences from the plan:
+
+- **No networkx or graphology.** The four algorithms are short exact implementations in TypeScript. Label
+  propagation is the asynchronous version with a seeded random order, so it is deterministic.
+- **Scores leave out menu links.** A page linked from 60% or more of the opened pages counts as a menu target, and
+  links to it are left out of PageRank, betweenness, harmonic and communities. `reachable` and `deadEnd` still use
+  every link.
+- **Communities come from opened pages only.** An unopened page joins the community of the first opened page that
+  links to it. A single opened page with no community is grouped with others of its URL template, and areas with
+  the same name are merged.
+- **`Area`, not `Feature`.** This matches the harness contract (`bench/README.md`). Flows don't exist on this branch,
+  so there is no `IN_FEATURE`.
+- **Links are never `submit_mutating`.** A same-site "Log in" or "Sign up" link only opens a page. The old code rated
+  it as mutating, which made routes to a login page cost about 100 times more.
+- **Guards on the model's answers:**
+  - A guided `stop` counts only after half the page budget is used.
+  - A skip pattern that would drop more than half the queue, or the start page, is ignored.
+- **The model is optional.** `src/llm.ts` uses `GRAPH_LLM_*`, falling back to the harness's `LLM_*`.
+  - Set `GRAPH_LLM=off` to run without a model.
+  - Without a model: no profile, brute-force exploration, and areas named after their shallowest page.
+
 ---
 
 # Part A — ported from the old project
