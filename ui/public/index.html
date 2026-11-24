@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Demo Agent</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand"><span class="logo">▶</span> Demo Agent</div>
+    <div class="chips" id="envChips"></div>
+  </header>
+
+  <div class="banner" id="banner" hidden></div>
+
+  <main class="layout">
+    <!-- ── Compose ─────────────────────────────────────────── -->
+    <form class="panel compose" id="compose" autocomplete="off">
+      <h2>New demo</h2>
+
+      <label class="field">
+        <span class="label">Site link <span class="mode" id="modeBadge" hidden></span></span>
+        <input id="url" type="url" placeholder="https://your-app.example.com" required>
+        <span class="hint">Your own app (in <code id="allowHosts">localhost</code>) runs in <b>full</b> mode; any other site in <b>public</b> mode: links, tabs, dialogs and search only. <a href="#" id="useFixture">Use the local test site</a></span>
+      </label>
+
+      <label class="field">
+        <span class="label">What should the demo show?</span>
+        <textarea id="goal" rows="3" placeholder="e.g. show how to invite a member and pick a role" required></textarea>
+        <span class="examples" id="examples"></span>
+      </label>
+
+      <label class="field">
+        <span class="label">Audience <span class="opt">optional</span></span>
+        <input id="audience" placeholder="e.g. new admin, 1st timer">
+      </label>
+
+      <div class="field">
+        <span class="label">Style</span>
+        <div class="styles" id="styles"></div>
+      </div>
+
+      <div class="field">
+        <span class="label">Length</span>
+        <div class="seg" id="lengths"></div>
+      </div>
+
+      <label class="toggle"><input type="checkbox" id="review" checked><span></span>Review the storyboard before recording</label>
+
+      <details class="advanced">
+        <summary>More settings</summary>
+        <div class="grid2">
+          <label class="field"><span class="label">Takes per shot</span><input id="takes" type="number" min="1" max="5" value="1"><span class="hint">Keeps the cleanest take</span></label>
+          <label class="field"><span class="label">Pages to crawl</span><input id="pages" type="number" min="1" max="200" value="20"><span class="hint">First crawl of a site</span></label>
+        </div>
+        <label class="toggle"><input type="checkbox" id="deepen" checked><span></span>Explore dialogs and tabs (safe clicks) after the crawl</label>
+        <label class="toggle"><input type="checkbox" id="extras" checked><span></span>Extras: .srt / .vtt captions, GIF, chapters, stills</label>
+        <label class="toggle"><input type="checkbox" id="headed"><span></span>Show the browser while it works</label>
+        <label class="toggle"><input type="checkbox" id="rebuild"><span></span>Crawl the site again (ignore a saved map)</label>
+
+        <div class="field">
+          <span class="label">Graph store</span>
+          <div class="seg" id="storeSeg">
+            <button type="button" data-v="none" class="on">In memory</button>
+            <button type="button" data-v="graph">Memgraph / Neo4j</button>
+          </div>
+          <input id="storeUri" placeholder="bolt://localhost:7688" hidden>
+          <span class="hint" id="storeHint">The map is built for this run only. With a database, the first run saves the site's map and later runs reuse it.</span>
+        </div>
+        <label class="field"><span class="label">Saved section graph <span class="opt">optional</span></span><input id="graphFile" placeholder=".demo-runs/&lt;id&gt;/graph.json"><span class="hint">Use a graph file from the studio instead of crawling (path on the server)</span></label>
+        <label class="field"><span class="label">Login state <span class="opt">optional</span></span><input id="storageState" placeholder="auth/demo-account.json"><span class="hint">Playwright storage state of a seeded demo account</span></label>
+      </details>
+
+      <button class="primary" id="start" type="submit">Make the demo</button>
+      <p class="err" id="composeErr" hidden></p>
+    </form>
+
+    <!-- ── Run / result ────────────────────────────────────── -->
+    <section class="panel stage">
+      <div id="idle" class="idle">
+        <div class="empty">
+          <div class="big">🎬</div>
+          <p>Give it a link and say what to show.<br>The agent maps the site, plans a storyboard, records the screen and renders a narrated video.</p>
+          <ol class="flow"><li>Map</li><li>Plan</li><li>Approve</li><li>Record</li><li>Voice + captions</li><li>Video</li></ol>
+        </div>
+      </div>
+
+      <div id="job" hidden>
+        <div class="jobhead">
+          <div>
+            <div class="jobtitle" id="jobTitle"></div>
+            <div class="jobsub" id="jobSub"></div>
+          </div>
+          <span class="pill" id="jobStatus"></span>
+        </div>
+        <ol class="stepper" id="stepper"></ol>
+        <div id="pending"></div>
+        <details class="logbox" id="logWrap" open>
+          <summary>Activity <span class="count" id="logCount"></span></summary>
+          <pre id="log"></pre>
+        </details>
+      </div>
+
+      <div id="result" hidden></div>
+
+      <div class="history">
+        <div class="histhead"><h3>Recent demos</h3><button type="button" class="ghost" id="refresh">Refresh</button></div>
+        <ul id="history"></ul>
+      </div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
