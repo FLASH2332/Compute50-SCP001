@@ -23,9 +23,24 @@ export interface SitePage {
   error?: string;
   screenshotBase64?: string;
   discoveredAt: string;
+  redirectedTo?: string;
+  pagination?: { startUrl: string; clicks: number; signature?: string };
+}
+
+export interface SiteLink {
+  source: string;
+  target: string;
+  url: string;
+  label: string;
+  next: boolean;
+  via?: 'button';
+  interactionId?: string;   // reached by clicking a (non-link) button, see Interaction
 }
 
 export interface PageSection {
+  positionPct?: number;     // top relative to document height; absent on older graphs
+  heightScreens?: number;
+  regionSelector?: string;  // measured DOM region, including sections without controls/headings
   id: string;
   pageId: string;
   name: string;             // aria-label > id > first heading > class > role-N
@@ -51,12 +66,31 @@ export interface SectionAction {
   groupSize?: number;       // >1 when this stands for a group of repeated links
 }
 
+/** What happened when a button/tab was clicked (in a read-only browser). */
+export interface Interaction {
+  id: string;
+  pageId: string;
+  sectionId: string;
+  actionId: string;
+  label: string;
+  selector: string;
+  kind: 'dialog' | 'panel' | 'navigate' | 'nothing';
+  result: string;           // e.g. 'Opens "Sign in to register"'
+  resultUrl?: string;       // for kind 'navigate'
+}
+
 export interface SectionGraphModel {
   startUrl: string;
   domain: string;
   pages: Record<string, SitePage>;
   sections: Record<string, PageSection>;
   actions: Record<string, SectionAction>;
+  links?: SiteLink[];
+  interactions?: Record<string, Interaction>;
+  coverage?: {
+    remaining: number;
+    reason: 'frontier exhausted' | 'page limit' | 'depth limit' | 'blocked' | 'stopped';
+  };
 }
 
 export interface SectionCrawlConfig {
@@ -67,6 +101,12 @@ export interface SectionCrawlConfig {
   captureScreenshots?: boolean;
   browserChannel?: string;
   allowedDomains?: string[];
+  navigationAttempts?: number;
+  readOnly?: boolean;
+  buttonPagination?: boolean;
+  probeClicks?: boolean;      // click buttons/tabs to learn what they do (read-only mode only)
+  maxProbePages?: number;     // pages whose buttons are probed (default 3)
+  maxClicksPerPage?: number;  // buttons probed per page (default 6)
 }
 
 export type SectionCrawlEvent =

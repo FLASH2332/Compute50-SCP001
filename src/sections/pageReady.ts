@@ -39,13 +39,13 @@ export async function waitForPageReady(page: PlaywrightPage, maxMs = 10000): Pro
  * Opens a URL with retries. Slow sites (or a site briefly refusing us) get
  * up to `attempts` tries with a longer timeout before the crawl gives up.
  */
-export async function gotoWithRetry(page: PlaywrightPage, url: string, attempts = 3, timeout = 45000): Promise<void> {
+export async function gotoWithRetry(page: PlaywrightPage, url: string, attempts = 3, timeout = 45000) {
   let lastError: unknown;
   for (let i = 1; i <= attempts; i++) {
     try {
-      await page.goto(url, { waitUntil: 'domcontentloaded', timeout });
+      const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout });
       await waitForPageReady(page);
-      return;
+      return response;
     } catch (err) {
       lastError = err;
       if (i < attempts) await page.waitForTimeout(2000 * i);

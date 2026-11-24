@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Demo Studio · Web Graph Engine</title>
+  <link rel="stylesheet" href="/studio.css">
+  <script defer src="/graph-list.js"></script>
+  <script type="module" src="/studio.js"></script>
+</head>
+<body>
+  <header class="top"><a class="brand" href="/studio.html">Demo Studio</a><a class="studio-graph-link" href="/">Graph Explorer</a></header>
+  <main>
+    <section class="intro"><h1>Turn a website into a walkthrough</h1>
+      <p>Explore pages and their links, pick a route, then record the browser as it scrolls through the steps.</p></section>
+    <div class="workspace">
+      <form id="run-form" class="card">
+        <h2>New walkthrough</h2>
+        <label for="url">Website URL</label>
+        <input id="url" type="url" name="url" placeholder="https://your-product.com" required>
+        <label for="prompt">What should the demo show?</label>
+        <textarea id="prompt" name="prompt" rows="4" maxlength="600" placeholder="Show how to browse the catalog and continue to the next page"></textarea>
+        <details><summary>Crawl limits</summary><div class="limits">
+          <label>Max pages <input name="maxPages" type="number" min="1" max="200" value="40" required></label>
+          <label>Link hops <input name="maxDepth" type="number" min="0" max="30" value="12" required></label>
+        </div><label><input type="checkbox" name="requireFullCoverage"> Strict: require every discovered page to load before recording (most real sites will fail)</label></details>
+        <button id="generate">Generate walkthrough</button>
+      </form>
+      <section class="card output" aria-labelledby="output-heading">
+        <h2 id="output-heading">Walkthrough</h2>
+        <ol class="pipeline"><li data-stage="exploring">Explore</li><li data-stage="planning">Plan</li><li data-stage="recording">Record</li></ol>
+        <p id="status" role="status">Enter a URL to get started.</p>
+        <p id="coverage" class="secondary" hidden></p>
+        <section id="route" hidden><h3>Recording plan</h3><ol id="shots"></ol></section>
+        <div id="results" hidden>
+          <video id="preview" controls playsinline aria-label="Recorded walkthrough"></video>
+          <div class="downloads"><a id="mp4" download>Download MP4</a><a id="interactive" target="_blank" rel="noopener">Open interactive demo</a><a id="graph" download>Download graph JSON</a><a id="plan" download>Download plan JSON</a></div>
+        </div>
+        <section id="graph-panel" hidden>
+          <div class="graph-heading"><h3>Explored graph</h3><a class="studio-graph-link" href="/">Open graph in Graph Explorer</a></div>
+          <div id="graph-tree"></div>
+        </section>
+      </section>
+    </div>
+  </main>
+</body>
+</html>

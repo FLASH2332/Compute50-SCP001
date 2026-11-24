@@ -1,5 +1,13 @@
 let cy = null;
-let currentGraphModel = null;
+let inspectorRequest = 0;
+let graphRequest = 0;
+let renderedView = '';
+let graphRevision;
+let forceWorker;
+let studioGraphTimer;
+const studioRun = new URLSearchParams(location.search).get('run');
+const studioEndpoint = studioRun ? '/api/studio/runs/' + encodeURIComponent(studioRun) : null;
+const graphEndpoint = studioEndpoint ? studioEndpoint + '/graph' : '/api/graph';
 let ws = null;
 let eventCount = 0;
 
@@ -8,9 +16,21 @@ document.addEventListener('DOMContentLoaded', () => {
   const urlInput = document.getElementById('input-url');
   if (urlInput && !urlInput.value) urlInput.value = `${location.origin}/demo`;
   initCytoscape();
-  setupWebSocket();
   setupEventListeners();
-  checkNeo4jStatus();
+  if (studioRun) {
+    document.getElementById('studio-source').hidden = false;
+    for (const id of ['crawl-controls', 'neo4j-status-pill', 'btn-sync-neo4j', 'btn-export-cypher']) {
+      document.getElementById(id).hidden = true;
+    }
+    const studioLink = document.getElementById('studio-link');
+    studioLink.href = '/studio.html?run=' + encodeURIComponent(studioRun);
+    studioLink.textContent = 'Back to walkthrough';
+    document.getElementById('log-container').textContent = '';
+    document.getElementById('log-header').firstElementChild.textContent = 'Walkthrough activity';
+  } else {
+    setupWebSocket();
+    checkNeo4jStatus();
+  }
   fetchGraphData();
 });
 
@@ -24,12 +44,14 @@ function initCytoscape() {
       {
         selector: 'node',
         style: {
-          'label': 'data(label)',
+          'label': ele => ele.data('displayLabel') || ele.data('label'),
           'color': '#f8fafc',
-          'font-size': '11px',
+          'font-size': '13px',
+          'min-zoomed-font-size': 8,
           'text-valign': 'center',
           'text-halign': 'center',
           'text-wrap': 'wrap',
+          'text-overflow-wrap': 'anywhere',
           'text-max-width': '170px',
           'border-width': 2,
           'transition-property': 'background-color, border-color, width, height',
@@ -44,7 +66,7 @@ function initCytoscape() {
           'background-color': '#0369a1',
           'border-color': '#38bdf8',
           'width': '180px',
-          'height': '56px',
+          'height': '68px',
           'font-weight': 'bold'
         }
       },
@@ -61,7 +83,7 @@ function initCytoscape() {
       // Section
       {
         selector: '.node-section',
-        style: { 'shape': 'round-rectangle', 'background-color': '#064e3b', 'border-color': '#10b981', 'width': '190px', 'height': '50px', 'font-size': '10px' }
+        style: { 'shape': 'round-rectangle', 'background-color': '#064e3b', 'border-color': '#10b981', 'width': '190px', 'height': '64px', 'font-size': '12px' }
       },
       {
         selector: '.node-section-form, .node-section-dialog',
@@ -78,7 +100,7 @@ function initCytoscape() {
       // Action
       {
         selector: '.node-action',
-        style: { 'shape': 'round-rectangle', 'background-color': '#78350f', 'border-color': '#fbbf24', 'border-width': 1, 'width': '130px', 'height': '28px', 'font-size': '9px', 'text-max-width': '120px' }
+        style: { 'shape': 'round-rectangle', 'background-color': '#78350f', 'border-color': '#fbbf24', 'border-width': 1, 'width': '192px', 'height': '62px', 'font-size': '13px', 'text-max-width': '174px' }
       },
       // Edges
       {
@@ -89,7 +111,8 @@ function initCytoscape() {
         selector: '.edge-nav',
         style: {
           'curve-style': 'bezier', 'target-arrow-shape': 'triangle', 'line-color': '#38bdf8', 'target-arrow-color': '#38bdf8', 'width': 2,
-          'label': 'data(label)', 'font-size': '9px', 'color': '#7dd3fc',
+          'label': ele => ele.data('label') === 'link' ? '' : ele.data('label'),
+          'font-size': '10px', 'min-zoomed-font-size': 9, 'color': '#7dd3fc',
           'text-background-color': '#0f172a', 'text-background-opacity': 0.9, 'text-background-padding': '2px'
         }
       },
@@ -98,10 +121,7 @@ function initCytoscape() {
         selector: 'node:selected',
         style: {
           'border-color': '#ffffff',
-          'border-width': 4,
-          'shadow-blur': 12,
-          'shadow-color': '#38bdf8',
-          'shadow-opacity': 0.8
+          'border-width': 4
         }
       },
       {
@@ -111,6 +131,10 @@ function initCytoscape() {
           'target-arrow-color': '#ffffff',
           'width': 4
         }
+      },
+      {
+        selector: '.route-muted',
+        style: { 'opacity': 0.17 }
       }
     ]
   });
@@ -120,6 +144,14 @@ function initCytoscape() {
     const item = evt.target;
     inspectItem(item);
   });
+  cy.on('select unselect', '.node-page', () => {
+    if (renderedView !== 'pages') return;
+    const selected = cy.nodes('.node-page:selected');
+    const routes = selected.connectedEdges();
+    cy.edges().toggleClass('route-muted', selected.length > 0);
+    routes.removeClass('route-muted');
+  });
+  new ResizeObserver(() => cy.resize()).observe(cy.container());
 }
 
 // 2. WebSocket Connection for Real-Time Streaming
@@ -178,11 +210,23 @@ function handleServerEvent(evt) {
 
 // 4. Fetch Graph Data and Render into Cytoscape
 async function fetchGraphData() {
+  clearTimeout(studioGraphTimer);
   const filter = document.getElementById('select-filter-mode').value;
+  const request = ++graphRequest;
   try {
-    const res = await fetch(`/api/graph?filter=${filter}`);
+    const query = new URLSearchParams({ filter, view: 'canvas' });
+    if (studioRun && filter === renderedView && graphRevision !== undefined) query.set('since', graphRevision);
+    const res = await fetch(graphEndpoint + '?' + query);
+    if (!res.ok) throw new Error(res.status === 404 ? 'This walkthrough graph could not be found.' : 'Could not load the graph.');
     const data = await res.json();
-    currentGraphModel = data.model;
+    if (request !== graphRequest) return;
+    if (studioRun) updateStudioStatus(data);
+    if (data.unchanged) return;
+    if (studioRun) document.getElementById('studio-source-url').textContent = decodedUrl(data.startUrl);
+    const previous = cy.$(':selected').first().id();
+    const viewport = cy.nodes().length && renderedView === filter ? { zoom: cy.zoom(), pan: { ...cy.pan() } } : null;
+    renderedView = filter;
+    graphRevision = data.revision;
 
     // Update Metrics
     document.getElementById('metric-pages').innerText = data.stats.pagesCount;
@@ -191,52 +235,171 @@ async function fetchGraphData() {
     document.getElementById('metric-elements').innerText = data.stats.actionsCount;
     document.getElementById('metric-workflows').innerText = data.stats.linkedPagesCount;
 
-    // Update Cytoscape Graph
-    cy.elements().remove();
-    cy.add(data.elements);
-
-    // Apply layout
-    applyLayout();
+    replaceElements(data.elements);
+    applyLayout(Boolean(viewport));
+    if (viewport) cy.viewport(viewport);
+    const selected = cy.getElementById(previous || '');
+    if (selected.length) inspectItem(selected.select());
+    else resetInspector();
+    if (filter === 'pages') {
+      const pending = data.stats.linkedPagesCount;
+      setViewStatus(`${data.stats.pagesCount} attempted pages · ${cy.edges().length} routes. Select a page to highlight its routes.${pending ? ' Unopened links are in the inspector.' : ''}`);
+    } else {
+      setViewStatus('Scroll to zoom, drag the canvas to pan, and select a section to inspect its actions.');
+    }
   } catch (err) {
+    if (request === graphRequest && studioRun) document.getElementById('studio-source-status').textContent = err.message;
     console.error('Fetch graph error:', err);
   }
 }
 
+function updateStudioStatus({ stage, message = 'Saved walkthrough graph' }) {
+  const status = document.getElementById('studio-source-status');
+  if (status.textContent !== message) appendLog(stage === 'failed' ? 'error' : 'info', message);
+  status.textContent = message;
+  if (stage === 'exploring') studioGraphTimer = setTimeout(fetchGraphData, 1200);
+  if (stage === 'planning' || stage === 'recording') studioGraphTimer = setTimeout(pollStudioStatus, 1200);
+}
+
+async function pollStudioStatus() {
+  const request = graphRequest;
+  try {
+    const response = await fetch(studioEndpoint);
+    if (!response.ok) throw new Error('Could not load walkthrough status.');
+    const status = await response.json();
+    if (request === graphRequest) updateStudioStatus(status);
+  } catch (error) {
+    if (request === graphRequest) document.getElementById('studio-source-status').textContent = error.message;
+  }
+}
+
+function decodedUrl(value) {
+  try { return decodeURIComponent(value); } catch {
+    return value.replace(/(?:%[\da-f]{2})+/gi, encoded => new URLSearchParams('url=' + encoded).get('url'));
+  }
+}
+
+function replaceElements(elements) {
+  cy.batch(() => {
+    cy.elements().remove();
+    cy.add(elements);
+  });
+}
+
+function setViewStatus(message) {
+  document.getElementById('graph-view-status').textContent = message;
+}
+
 // 5. Apply Selected Layout
-function applyLayout() {
+function applyLayout(preserveViewport = false) {
+  forceWorker?.terminate();
+  forceWorker = undefined;
   const layoutName = document.getElementById('select-layout').value;
+  if (layoutName === 'cose' && cy.nodes().length) {
+    const worker = new Worker('/force-layout.js');
+    forceWorker = worker;
+    const viewport = { pan: { ...cy.pan() }, zoom: cy.zoom() };
+    worker.onmessage = ({ data }) => {
+      if (forceWorker !== worker) return;
+      worker.terminate();
+      forceWorker = undefined;
+      cy.batch(() => {
+        for (const { id, position } of data) cy.getElementById(id).position(position);
+      });
+      if (!preserveViewport && cy.zoom() === viewport.zoom && cy.pan().x === viewport.pan.x && cy.pan().y === viewport.pan.y) centerGraph();
+    };
+    worker.onerror = () => {
+      if (forceWorker !== worker) return;
+      worker.terminate();
+      forceWorker = undefined;
+      setViewStatus('Force layout could not finish. Choose another graph layout.');
+    };
+    worker.postMessage([
+      ...cy.nodes().map(n => ({ data: { id: n.id(), width: n.width(), height: n.height() }, position: n.position() })),
+      ...cy.edges().map(e => ({ data: { id: e.id(), source: e.source().id(), target: e.target().id() } }))
+    ]);
+    return;
+  }
   if (layoutName === 'breadthfirst') {
+    if (renderedView === 'pages') {
+      layoutPageMap();
+      centerGraph();
+      return;
+    }
     // Top-down flow: Page -> entry state -> next screens, like a user journey
-    const start = currentGraphModel && currentGraphModel.pages ? Object.values(currentGraphModel.pages).find(p => p.depth === 0 && p.crawled) : null;
-    const roots = start ? cy.getElementById(start.id) : cy.nodes('.node-page').filter(n => n.indegree(false) === 0);
+    const roots = cy.nodes('.node-page').filter(n => n.data('depth') === 0);
     cy.layout({
       name: 'breadthfirst',
       directed: true,
       roots: roots.length ? roots : undefined,
-      spacingFactor: 1.4,
+      spacingFactor: 1,
       avoidOverlap: true,
       nodeDimensionsIncludeLabels: true,
-      animate: true,
-      animationDuration: 400,
-      padding: 30,
-      fit: true
+      animate: false,
+      fit: false
     }).run();
+    centerGraph();
     return;
   }
   const layout = cy.layout({
     name: layoutName,
-    animate: true,
-    animationDuration: 400,
-    padding: 30,
-    fit: true,
+    animate: false,
+    fit: false,
     idealEdgeLength: 100,
     nodeOverlap: 20
   });
   layout.run();
+  centerGraph();
+}
+
+function layoutPageMap() {
+  const columns = Math.max(1, Math.floor((cy.width() - 64) / 198));
+  const visited = cy.nodes().sort((a, b) => a.data('depth') - b.data('depth'));
+  const ranks = new Map();
+  visited.forEach(page => {
+    const depth = page.data('depth');
+    if (!ranks.has(depth)) ranks.set(depth, []);
+    ranks.get(depth).push(page);
+  });
+  let row = 0;
+  cy.batch(() => {
+    for (const pages of ranks.values()) {
+      for (let offset = 0; offset < pages.length; offset += columns) {
+        const group = pages.slice(offset, offset + columns);
+        group.forEach((page, index) => page.position({
+          x: (index - (group.length - 1) / 2) * 198,
+          y: row * 117
+        }));
+        row++;
+      }
+    }
+  });
+}
+
+function centerGraph() {
+  if (!cy.nodes().length) return;
+  cy.fit(cy.elements(), 32);
+  if (cy.zoom() > 1) {
+    cy.zoom(1);
+    cy.center();
+  } else if (cy.zoom() < 0.75) {
+    const root = cy.nodes('.node-page').filter(node => node.data('depth') === 0).first();
+    cy.zoom(0.75);
+    cy.center(root.length ? root : cy.nodes().first());
+  }
+}
+
+function resetInspector() {
+  inspectorRequest++;
+  document.getElementById('inspector-title').textContent = 'Entity Inspector';
+  document.getElementById('inspector-badge').textContent = 'Select Node';
+  document.getElementById('inspector-content').innerHTML =
+    '<p class="placeholder-text">Select a node or link to see its details.</p>';
 }
 
 // 6. Inspect Node or Edge
-function inspectItem(item) {
+async function inspectItem(item) {
+  const request = ++inspectorRequest;
   const escapeHtml = value => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
   const data = item.data();
   const isNode = item.isNode();
@@ -247,7 +410,7 @@ function inspectItem(item) {
 
   if (isNode) {
     titleEl.innerText = data.type || 'Node';
-    badgeEl.innerText = data.id;
+    badgeEl.innerText = data.type === 'Page' ? decodedUrl(data.id) : data.id;
 
     let html = `
       <div class="detail-row">
@@ -258,31 +421,59 @@ function inspectItem(item) {
 
     const row = (label, value) => `<div class="detail-row"><div class="detail-label">${label}</div><div class="detail-val">${value}</div></div>`;
     if (data.type === 'Page') {
-      html += row('URL', escapeHtml(data.url));
+      html += row('URL', escapeHtml(decodedUrl(data.url)));
       html += row('Status', data.crawled ? escapeHtml(data.status === 'ok' ? 'Opened and read' : data.status === 'bot-check' ? 'Blocked by a bot-protection check (not bypassed)' : `Could not open: ${data.error || ''}`) : 'Linked from a crawled page, not opened (limit reached)');
       html += row('Link hops from start', escapeHtml(data.depth));
-      if (currentGraphModel && data.crawled) {
-        const secs = Object.values(currentGraphModel.sections).filter(s => s.pageId === data.id).sort((a, b) => a.order - b.order);
-        html += row(`Sections (${secs.length})`, secs.map(s => `- ${escapeHtml(s.role)}: ${escapeHtml(s.name)} (${s.actionCount} actions)`).join('<br>') || 'None');
-      }
       if (data.hasScreenshot) html += row('Screenshot', `<img class="screenshot-preview" src="/api/graph/pages/screenshot?id=${encodeURIComponent(data.id)}" alt="Page screenshot" />`);
     } else if (data.type === 'Section') {
       html += row('Role', escapeHtml(data.role) + (data.hidden ? ' (in the page but not visible, e.g. a closed dialog)' : ''));
       html += row('Summary', escapeHtml(data.summary));
       html += row('Actions', `${data.actionCount}${data.totalActions > data.actionCount ? ` shown (${data.totalActions} found; repeated links grouped)` : ''}`);
-      if (currentGraphModel) {
-        const acts = Object.values(currentGraphModel.actions).filter(a => a.sectionId === data.id);
-        html += row('What a visitor can do here', acts.map(a => `- ${escapeHtml(a.type)}${a.inputType ? ' (' + escapeHtml(a.inputType) + ')' : ''}: ${escapeHtml(a.label)}${a.groupSize ? ` <i>x${a.groupSize}</i>` : ''}${a.href ? ` &rarr; <span style="opacity:.7">${escapeHtml(a.href)}</span>` : ''}${a.external ? ' (other site)' : ''}`).join('<br>') || 'None');
-      }
     } else if (data.type === 'Action') {
       html += row('Type', escapeHtml(data.actionType) + (data.inputType ? ` (${escapeHtml(data.inputType)})` : ''));
       html += row('Selector', escapeHtml(data.selector));
-      if (data.href) html += row('Goes to', escapeHtml(data.href) + (data.external ? ' (other site)' : ''));
+      if (data.href) html += row('Goes to', escapeHtml(decodedUrl(data.href)) + (data.external ? ' (other site)' : ''));
       if (data.groupSize) html += row('Repeated', `Stands for ${data.groupSize} similar links`);
       html += row('Visible on load', data.visible ? 'Yes' : 'No (e.g. inside a closed menu)');
     }
 
     contentEl.innerHTML = html;
+    if (!['Page', 'Section'].includes(data.type)) return;
+    const details = document.createElement('div');
+    details.textContent = 'Loading details…';
+    contentEl.append(details);
+    try {
+      const pageId = data.type === 'Page' ? data.id : data.pageId;
+      const response = await fetch(graphEndpoint + '/page?id=' + encodeURIComponent(pageId));
+      if (!response.ok) throw new Error('Could not load page details.');
+      const page = await response.json();
+      if (request !== inspectorRequest) return;
+      if (data.type === 'Section') {
+        const actions = page.actions.filter(a => a.sectionId === data.id);
+        details.textContent = actions.length ? 'What a visitor can do here' : 'No actions';
+        if (actions.length) details.append(graphList(actions, a =>
+          a.type + (a.inputType ? ' (' + a.inputType + ')' : '') + ': ' + a.label + (a.groupSize ? ' ×' + a.groupSize : '') +
+          (a.href ? ' → ' + decodedUrl(a.href) : '') + (a.external ? ' (other site)' : '')));
+      } else {
+        details.textContent = 'Sections (' + page.sections.length + ')';
+        details.append(graphList(page.sections, s => s.role + ': ' + s.name + ' (' + s.actionCount + ' actions)'));
+        const links = renderedView === 'pages' ? page.links.filter(link => !link.opened) : [];
+        if (links.length) {
+          const outgoing = document.createElement('details');
+          outgoing.className = 'inspector-links';
+          const summary = document.createElement('summary');
+          summary.textContent = links.length + ' discovered links to unopened pages';
+          outgoing.append(summary);
+          outgoing.addEventListener('toggle', () => {
+            if (outgoing.open && !summary.nextElementSibling) outgoing.append(graphList(links, l => l.label + ' → ' + decodedUrl(l.url)));
+          });
+          details.append(outgoing);
+        }
+      }
+    } catch (error) {
+      if (request === inspectorRequest) details.textContent = error.message;
+    }
+
   } else {
     titleEl.innerText = data.type === 'NAVIGATES_TO' ? 'Link to page' : 'Contains';
     badgeEl.innerText = data.type;
@@ -386,12 +577,10 @@ function setupEventListeners() {
   document.getElementById('select-filter-mode').addEventListener('change', fetchGraphData);
 
   // Layout change
-  document.getElementById('select-layout').addEventListener('change', applyLayout);
+  document.getElementById('select-layout').addEventListener('change', () => applyLayout());
 
   // Fit Viewport
-  document.getElementById('btn-fit-graph').addEventListener('click', () => {
-    cy.fit(undefined, 30);
-  });
+  document.getElementById('btn-fit-graph').addEventListener('click', centerGraph);
 
   // Log drawer toggle
   const logDrawer = document.getElementById('log-drawer');

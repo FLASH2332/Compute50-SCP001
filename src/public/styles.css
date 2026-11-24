@@ -227,6 +227,33 @@ body {
   cursor: pointer;
 }
 
+.action-navigation {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.graph-view-status {
+  margin-top: 10px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.panel[hidden], .topbar-right > [hidden] { display: none; }
+#studio-source-url { font-size: 13px; overflow-wrap: anywhere; }
+#studio-source > a { margin-top: 12px; }
+
+.inspector-links {
+  margin-top: 12px;
+  overflow-wrap: anywhere;
+}
+
+.inspector-links summary { cursor: pointer; }
+.inspector-links ul { margin: 8px 0 0 20px; }
+.inspector-links li { margin-bottom: 6px; }
+
 .action-buttons {
   display: flex;
   flex-direction: column;
@@ -267,6 +294,7 @@ body {
 /* Center Cytoscape Canvas */
 .viewport-wrapper {
   flex: 1;
+  min-width: 0;
   position: relative;
   display: flex;
   flex-direction: column;
@@ -274,9 +302,9 @@ body {
 }
 
 .cy-canvas {
-  flex: 1;
+  flex: 1 1 0;
+  min-height: 0;
   width: 100%;
-  height: 100%;
 }
 
 /* Legend */
@@ -310,7 +338,6 @@ body {
 }
 
 .legend-page { background: #38bdf8; }
-.legend-linked { background: transparent; border: 1px dashed #38bdf8; }
 .legend-state { background: #10b981; }
 .legend-modal { background: #c084fc; }
 .legend-element { background: #fbbf24; }
@@ -318,10 +345,7 @@ body {
 
 /* Bottom Log Drawer */
 .log-drawer {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
+  flex-shrink: 0;
   background: rgba(15, 23, 42, 0.95);
   backdrop-filter: blur(8px);
   border-top: 1px solid var(--border);

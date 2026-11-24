@@ -6,7 +6,7 @@
   <title>Web Graph Engine — Playwright + Neo4j + Cytoscape.js</title>
   <link rel="stylesheet" href="styles.css">
   <!-- Cytoscape.js core & layout extensions -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.30.4/cytoscape.min.js"></script>
+  <script defer src="/vendor/cytoscape.min.js"></script>
 </head>
 <body>
   <div class="app-layout">
@@ -20,6 +20,7 @@
         </div>
       </div>
       <div class="topbar-right">
+        <a id="studio-link" class="btn btn-outline" href="/studio.html">Demo Studio</a>
         <div id="neo4j-status-pill" class="status-pill status-checking">
           <span class="status-dot"></span>
           <span id="neo4j-status-text">Checking Neo4j...</span>
@@ -36,7 +37,13 @@
     <div class="main-container">
       <!-- Left Controls Sidebar -->
       <aside class="sidebar">
-        <div class="panel">
+        <div class="panel" id="studio-source" hidden>
+          <h2 class="panel-title">Demo Studio graph</h2>
+          <p id="studio-source-url"></p>
+          <p id="studio-source-status" class="graph-view-status" role="status">Loading walkthrough graph…</p>
+          <a class="btn btn-outline" href="/">Explore a different website</a>
+        </div>
+        <div class="panel" id="crawl-controls">
           <h2 class="panel-title">Explore Website</h2>
           <div class="form-group">
             <label for="input-url">Website URL</label>
@@ -105,15 +112,14 @@
         <div class="panel">
           <h2 class="panel-title">Visualization Controls</h2>
           <div class="form-group">
-            <label>Graph Detail Level</label>
+            <label for="select-filter-mode">Graph Detail Level</label>
             <select id="select-filter-mode">
               <option value="sections" selected>Pages &amp; sections</option>
-              <option value="actions">Pages, sections &amp; actions</option>
-              <option value="pages">Site map (pages only)</option>
+              <option value="pages">Site map (opened pages)</option>
             </select>
           </div>
-          <div class="form-group">
-            <label>Graph Layout</label>
+          <div class="form-group" id="layout-controls">
+            <label for="select-layout">Graph Layout</label>
             <select id="select-layout">
               <option value="cose">CoSE (Force-directed physics)</option>
               <option value="breadthfirst" selected>Top-down flow (Hierarchical)</option>
@@ -123,8 +129,9 @@
             </select>
           </div>
           <button id="btn-fit-graph" class="btn btn-outline" style="width: 100%;">
-            Center & Fit Viewport
+            Center graph
           </button>
+          <p class="graph-view-status" id="graph-view-status" role="status"></p>
         </div>
       </aside>
 
@@ -135,7 +142,6 @@
         <!-- Legend Overlay -->
         <div class="legend-card">
           <div class="legend-item"><span class="legend-color legend-page"></span> Page (opened)</div>
-          <div class="legend-item"><span class="legend-color legend-linked"></span> Page (linked, not opened)</div>
           <div class="legend-item"><span class="legend-color legend-state"></span> Section</div>
           <div class="legend-item"><span class="legend-color legend-modal"></span> Form / dialog section</div>
           <div class="legend-item"><span class="legend-color legend-element"></span> Action</div>
@@ -167,6 +173,7 @@
     </div>
   </div>
 
+  <script src="/graph-list.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

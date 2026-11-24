@@ -3,6 +3,22 @@ import { test } from 'node:test';
 import { chromium } from 'playwright';
 import { SectionCrawler } from '../src/sections/sectionCrawler.js';
 import { SectionGraph, sectionGraphToCypher } from '../src/sections/sectionGraph.js';
+import { readPageRegions, buildSections } from '../src/sections/sectionExtractor.js';
+
+test('extractor measures a halfway section against document height and viewport height', async () => {
+  const browser = await chromium.launch({ channel: process.env.CRAWLER_BROWSER_CHANNEL });
+  try {
+    const tab = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+    await tab.evaluate('globalThis.__name = t => t');
+    await tab.setContent('<style>body{height:4000px;margin:0}section{position:absolute;top:2000px;height:1280px}</style><section><h2>Halfway</h2></section>');
+    await tab.evaluate(() => window.scrollTo(0, 600));
+    const { regions } = await readPageRegions(tab);
+    const [section] = buildSections('home', regions, () => false, url => url).sections;
+    assert.ok(section.positionPct! >= 40 && section.positionPct! <= 60);
+    assert.equal(section.heightScreens, 1.6);
+    assert.equal(await tab.locator(section.regionSelector!).innerText(), 'Halfway');
+  } finally { await browser.close(); }
+});
 
 // Real-looking cards: image link + title link to the same event, plus a description
 const cards = Array.from({ length: 12 }, (_, i) => {
@@ -80,6 +96,7 @@ test('splits a page into sections, groups repeated cards, keeps menus, records f
     assert.equal(events.length, 3);
     assert.ok(events.every(a => a.groupSize === 12));
     assert.equal(byName('Upcoming events').totalActions, 12);
+    assert.equal(m.links?.filter(link => new URL(link.url).pathname.startsWith('/events/')).length, 12);
 
     // A list of different pages (no images/text per item) is kept in full
     assert.equal(actionsOf('Documentation').length, 8);
@@ -110,4 +127,49 @@ test('page ids drop tracking params, #hash and trailing slash', async () => {
   const { pageIdOf } = await import('../src/sections/sectionCrawler.js');
   assert.equal(pageIdOf('https://site.test/about/?utm_source=x#team'), 'https://site.test/about');
   assert.notEqual(pageIdOf('https://site.test/item/1'), pageIdOf('https://site.test/item/2'));
+});
+
+test('Cytoscape labels shorten page and section URLs without changing their data', () => {
+  const graph = new SectionGraph();
+  const signin = 'https://site.test/sign-in?next=%2Fhackathons%2Fflagsmith%3Fresume%3Dregister';
+  const home = 'https://site.test/';
+  const addPage = (url: string, title: string) => graph.setPage({
+    id: url, url, title, depth: 0, crawled: true, status: 'ok', discoveredAt: ''
+  }, [], []);
+  addPage(signin, 'Sign in | Site');
+  addPage(home, 'Home | Site');
+  graph.getModel().sections.account = {
+    id: 'account', pageId: signin, name: signin + ' | Site', role: 'form',
+    hidden: false, order: 0, actionCount: 0, totalActions: 0, summary: ''
+  };
+  const node = (id: string) => graph.toCytoscape().find(element => element.data.id === id).data;
+  assert.equal(node(signin).label, 'Sign in\n/sign-in');
+  assert.equal(node(home).label, 'Home\nHome');
+  assert.equal(node('account').label, 'form: /sign-in\n0 actions');
+  assert.equal(node('account').name, signin + ' | Site');
+  assert.equal(node(signin).id, signin);
+  assert.equal(node(signin).url, signin);
+  assert.equal(node(signin).path, new URL(signin).pathname + new URL(signin).search);
+
+  const other = 'https://site.test/sign-in?redirect=%2Fworkspace%2Fteam%3Fmode%3Djoin#form';
+  const third = 'https://site.test/sign-in?tab=account';
+  const decoded = 'https://site.test/guides/caf%C3%A9%20menu?sort=recent#intro';
+  const long = 'https://site.test/guides/' + 'long-path-'.repeat(5);
+  addPage(other, 'Sign in - Site');
+  addPage(third, 'Sign in · Site');
+  addPage(decoded, '');
+  addPage(long, long);
+  graph.addLinkedPage('unopened', 'https://site.test/guides/unopened?lang=en', 1);
+  const map = graph.toCytoscape('pages');
+  const label = (id: string) => map.find(element => element.data.id === id).data.label;
+  assert.equal(label(signin), 'Sign in\n/sign-in (from: flagsmith)');
+  assert.equal(label(other), 'Sign in\n/sign-in (from: team)');
+  assert.equal(label(third), 'Sign in\n/sign-in (2)');
+  assert.equal(label(decoded), '/guides/café menu');
+  assert.equal(label(long).length, 32);
+  assert.ok(label(long).endsWith('…'));
+  // Site map shows opened pages only; the unopened link stays in the data
+  assert.ok(!map.some(element => element.data.id === 'unopened'));
+  assert.equal(graph.getModel().pages.unopened?.crawled, false);
+  assert.ok(map.every(element => !/[?%]/.test(element.data.label)));
 });

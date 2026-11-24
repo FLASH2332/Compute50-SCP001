@@ -9,6 +9,7 @@ import { Neo4jService } from '../neo4j/neo4jClient.js';
 import { SectionGraph, sectionGraphToCypher } from '../sections/sectionGraph.js';
 import { SectionCrawler } from '../sections/sectionCrawler.js';
 import type { SectionCrawlConfig, SectionCrawlEvent } from '../sections/types.js';
+import studio from '../demo/routes.js';
 
 dotenv.config();
 
@@ -21,6 +22,7 @@ const wss = new WebSocketServer({ server, path: '/ws' });
 
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
+app.use('/api/studio', studio);
 
 // Global singletons
 const graph = new SectionGraph();
@@ -44,13 +46,21 @@ function broadcast(event: SectionCrawlEvent) {
 
 // 1. Get current graph data (Cytoscape JSON + section model, screenshots left out)
 app.get('/api/graph', (req, res) => {
-  const filter = (req.query.filter as 'sections' | 'actions' | 'pages') || 'sections';
+  const filter = req.query.filter === 'pages' ? 'pages' : 'sections';
   const model = graph.getModel();
+  if (req.query.view === 'canvas') {
+    return res.json({ startUrl: model.startUrl, elements: graph.toCytoscape(filter), stats: graph.stats() });
+  }
   res.json({
     elements: graph.toCytoscape(filter),
     stats: graph.stats(),
     model: { ...model, pages: Object.fromEntries(Object.entries(model.pages).map(([id, { screenshotBase64, ...p }]) => [id, p])) }
   });
+});
+
+app.get('/api/graph/page', (req, res) => {
+  const details = graph.pageDetails(String(req.query.id));
+  return details ? res.json(details) : res.sendStatus(404);
 });
 
 app.get('/api/graph/pages/screenshot', (req, res) => {
@@ -170,6 +180,9 @@ app.get('/api/neo4j/cypher', (_req, res) => {
 });
 
 // Static assets
+app.get('/vendor/cytoscape.min.js', (_req, res) => {
+  res.sendFile(path.resolve('node_modules/cytoscape/dist/cytoscape.min.js'));
+});
 const publicDir = path.join(__dirname, '..', '..', 'src', 'public');
 const testSiteDir = path.join(__dirname, '..', '..', 'test-site');
 

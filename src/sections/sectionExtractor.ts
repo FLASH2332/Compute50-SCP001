@@ -15,6 +15,9 @@ interface RawAction {
   itemId?: number;          // which copy of the repeated item (to drop image+title duplicates)
 }
 interface RawRegion {
+  positionPct: number;
+  heightScreens: number;
+  regionSelector: string;
   role: SectionRole;
   ariaLabel: string;
   id: string;
@@ -28,6 +31,7 @@ export interface ExtractedPage {
   title: string;
   botCheck: boolean;
   regions: RawRegion[];
+  links: Array<{ url: string; label: string; next: boolean }>;
 }
 
 /**
@@ -143,8 +147,8 @@ export async function readPageRegions(page: PlaywrightPage): Promise<ExtractedPa
         return TEXT_FIELDS.has(t) ? { type: 'input', inputType: t } : { type: 'input', inputType: t };
       }
       if (tag === 'BUTTON') {
-        const t = (el.getAttribute('type') || 'submit').toLowerCase();
-        return { type: t === 'submit' && el.closest('form') ? 'submit' : 'button' };
+        const button = el as HTMLButtonElement;
+        return { type: button.type === 'submit' && button.form ? 'submit' : 'button' };
       }
       if (role === 'link' || role === 'menuitem') return { type: el.getAttribute('href') ? 'link' : 'button' };
       return { type: 'button' };
@@ -217,7 +221,7 @@ export async function readPageRegions(page: PlaywrightPage): Promise<ExtractedPa
       let href: string | undefined;
       if (kind.type === 'link') {
         const raw = (el as HTMLAnchorElement).href || el.getAttribute('href') || '';
-        if (raw && !/^(javascript|mailto|tel):/i.test(raw)) href = raw.split('#')[0] || undefined;
+        if (raw && !/^(javascript|mailto|tel):/i.test(raw)) href = raw.replace(/#(?![\/!]).*$/, '') || undefined;
         if (!href && /^(mailto|tel):/i.test(raw)) href = raw;
       }
       const list = byRegion.get(owner) || [];
@@ -242,7 +246,28 @@ export async function readPageRegions(page: PlaywrightPage): Promise<ExtractedPa
       }
       return '';
     };
-    const regions: RawRegion[] = all.map(el => ({
+    const geometry = (el: Element) => {
+      const rect = el.getBoundingClientRect();
+      const parts: string[] = [];
+      for (let n: Element | null = el; n; n = n.parentElement) {
+        if (n.id && document.querySelectorAll('#' + CSS.escape(n.id)).length === 1) {
+          parts.unshift('#' + CSS.escape(n.id));
+          break;
+        }
+        let index = 1;
+        for (let prev = n.previousElementSibling; prev; prev = prev.previousElementSibling) {
+          if (prev.localName === n.localName) index++;
+        }
+        parts.unshift(CSS.escape(n.localName) + ':nth-of-type(' + index + ')');
+      }
+      return {
+        positionPct: Math.min(100, Math.max(0, 100 * (rect.top + scrollY) / Math.max(innerHeight, (document.scrollingElement ?? document.documentElement).scrollHeight))),
+        heightScreens: rect.height / Math.max(1, innerHeight),
+        regionSelector: parts.join(' > ')
+      };
+    };
+    const candidates: RawRegion[] = all.map(el => ({
+      ...geometry(el),
       role: (roleOf(el) || fallbackRole.get(el) || 'content') as any,
       ariaLabel: clean(el.getAttribute('aria-label'), 50),
       id: clean(el.id, 50),
@@ -252,14 +277,26 @@ export async function readPageRegions(page: PlaywrightPage): Promise<ExtractedPa
       className: clean(typeof el.className === 'string' ? el.className.split(/\s+/)[0] : '', 50),
       hidden: !visible(el),
       actions: byRegion.get(el) || []
-    })).filter(r => r.actions.length > 0 || r.role === 'dialog' || r.role === 'form');
+    }));
+    const namedControls = new Set(candidates.filter(region => region.actions.length > 0)
+      .map(region => region.ariaLabel || region.heading || region.id));
+    const regions = candidates.filter(region => region.actions.length > 0 || region.role === 'dialog' ||
+      region.role === 'form' || (!region.hidden && region.heading && !namedControls.has(region.heading)));
 
     // Bot-protection pages are recognised and reported, never bypassed.
     const head = `${document.title} ${(document.body?.innerText || '').slice(0, 400)}`;
     const botCheck = /just a moment|performing security verification|verify you are (a )?human|checking your browser|attention required|are you a robot/i.test(head)
       || !!document.querySelector('#challenge-form, #cf-challenge-running, iframe[src*="challenges.cloudflare.com"], .g-recaptcha, .h-captcha');
 
-    return { title: document.title, botCheck, regions };
+    // Retain every link for discovery, independently of action display grouping.
+    const links = [...document.querySelectorAll<HTMLAnchorElement | HTMLLinkElement>('a[href], link[rel~="next"][href]')]
+      .filter(el => el.tagName === 'LINK' || (!el.closest('[aria-hidden="true"]') && !el.hasAttribute('download')))
+      .map(el => {
+        const label = el.tagName === 'LINK' ? 'Next page' : labelOf(el);
+        const next = el.relList.contains('next') || /^(next(?: page)?|older(?: posts)?)[\s›»→>]*$/i.test(label);
+        return { url: el.href, label, next };
+      });
+    return { title: document.title, botCheck, regions, links };
   });
 }
 
@@ -376,6 +413,9 @@ export function buildSections(pageId: string, regions: RawRegion[], isSameSite: 
       pageId,
       name,
       role: region.role,
+      positionPct: region.positionPct,
+      heightScreens: region.heightScreens,
+      regionSelector: region.regionSelector,
       order,
       hidden: region.hidden,
       actionCount: kept.length,
