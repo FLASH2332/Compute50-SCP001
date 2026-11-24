@@ -1,7 +1,9 @@
-"""Crawl a single webpage and store its navigation graph in Memgraph.
+"""Crawl a webpage (and same-site pages it links to) into a navigation graph in Memgraph.
 
 Usage:
-    python crawl_to_graph.py <url>
+    python crawl_to_graph.py <url> [--depth 1] [--max-pages 5]
+
+--depth 0 crawls only the given page.
 
 Requires GROQ_API_KEY in the environment and Memgraph on bolt://localhost:7687.
 """
@@ -12,13 +14,14 @@ import argparse
 import os
 import re
 import sys
-from collections import defaultdict
+import time
+from collections import defaultdict, deque
 from dataclasses import dataclass, field
-from urllib.parse import urljoin, urldefrag
+from urllib.parse import urljoin, urldefrag, urlparse
 
 from bs4 import BeautifulSoup, Tag
 from dotenv import load_dotenv
-from groq import Groq
+from groq import Groq, RateLimitError
 from neo4j import GraphDatabase
 from playwright.sync_api import sync_playwright
 
@@ -38,6 +41,12 @@ SEMANTIC_TAGS = [
 ]
 COLLAPSE_THRESHOLD = 6
 COLLAPSE_KEEP = 3
+SUMMARY_RETRIES = 5
+# Links to files, not pages; never crawled
+SKIP_EXTENSIONS = (
+    ".pdf", ".zip", ".gz", ".tgz", ".tar", ".xz", ".exe", ".msi", ".dmg", ".pkg",
+    ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".mp4", ".mp3", ".whl", ".asc",
+)
 TEXT_INPUT_TYPES = {"text", "search"}
 SUBMIT_INPUT_TYPES = {"submit"}
 
@@ -144,16 +153,41 @@ def region_name(el: Tag, role: str, index: int) -> str:
 # --------------------------------------------------------------------------- #
 # Scraping
 # --------------------------------------------------------------------------- #
-def fetch_html(url: str) -> tuple[str, str, str]:
-    """Return (final_url, title, html)."""
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        try:
-            page = browser.new_page()
-            page.goto(url, wait_until="networkidle", timeout=60_000)
-            return page.url, page.title(), page.content()
-        finally:
-            browser.close()
+def fetch_page(browser, url: str) -> tuple[str, str, str]:
+    """Return (final_url, title, html) using an already-launched browser."""
+    page = browser.new_page()
+    try:
+        page.goto(url, wait_until="networkidle", timeout=60_000)
+        return page.url, page.title(), page.content()
+    finally:
+        page.close()
+
+
+def url_key(url: str) -> str:
+    """Comparison key for URLs: no fragment, no trailing slash, host without www."""
+    parts = urlparse(urldefrag(url)[0])
+    host = parts.netloc.lower().removeprefix("www.")
+    path = parts.path.rstrip("/")
+    return f"{host}{path}" + (f"?{parts.query}" if parts.query else "")
+
+
+def same_site_links(sections: list[Section], site: str) -> list[str]:
+    """Links from the page's actions that stay on the same site, in page order."""
+    links = []
+    for s in sections:
+        for a in s.actions:
+            url = a.navigates_to
+            if not url:
+                continue
+            parts = urlparse(url)
+            if parts.scheme not in ("http", "https"):
+                continue
+            if parts.netloc.lower().removeprefix("www.") != site:
+                continue
+            if parts.path.lower().endswith(SKIP_EXTENSIONS):
+                continue
+            links.append(url)
+    return links
 
 
 def find_regions(soup: BeautifulSoup) -> list[tuple[Tag, str]]:
@@ -292,34 +326,61 @@ def reasoning_kwargs(model: str, effort: str = "low") -> dict:
     return {}
 
 
+def retry_after_seconds(err: Exception, default: float = 20.0) -> float:
+    """Seconds to wait after a Groq 429, from the header or the error message."""
+    resp = getattr(err, "response", None)
+    header = resp.headers.get("retry-after") if resp is not None else None
+    try:
+        return float(header) + 1
+    except (TypeError, ValueError):
+        pass
+    m = re.search(r"try again in (?:(\d+)m)?([\d.]+)s", str(err))
+    if m:
+        return int(m.group(1) or 0) * 60 + float(m.group(2)) + 1
+    return default
+
+
 def summarize_sections(sections: list[Section], page_url: str) -> None:
     client = Groq(api_key=os.environ["GROQ_API_KEY"])
     model = os.environ.get("GROQ_MODEL") or GROQ_MODEL
     for s in sections:
         labels = ", ".join(a.label for a in s.actions) or "none"
         text = f"Section '{s.name}' on {page_url}. Role: {s.role}. Actions: {labels}"
-        try:
-            resp = client.chat.completions.create(
-                model=model,
-                messages=[
-                    {"role": "system", "content": GROQ_PROMPT},
-                    {"role": "user", "content": text},
-                ],
-                temperature=0.2,
-                # gpt-oss reasons before answering; reasoning tokens count toward max_tokens
-                max_tokens=512,
-                **reasoning_kwargs(model),
-            )
-            s.summary = (resp.choices[0].message.content or "").strip()
-        except Exception as e:  # keep crawling even if one summary fails
-            print(f"  ! Groq summary failed for '{s.name}': {e}", file=sys.stderr)
-            s.summary = text
+        for attempt in range(1, SUMMARY_RETRIES + 1):
+            try:
+                resp = client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": GROQ_PROMPT},
+                        {"role": "user", "content": text},
+                    ],
+                    temperature=0.2,
+                    # gpt-oss reasons before answering; reasoning tokens count toward max_tokens
+                    max_tokens=512,
+                    **reasoning_kwargs(model),
+                )
+                s.summary = (resp.choices[0].message.content or "").strip() or text
+                break
+            except RateLimitError as e:
+                if attempt == SUMMARY_RETRIES:
+                    print(f"  ! Groq rate limit, giving up on '{s.name}'", file=sys.stderr)
+                    s.summary = text
+                    break
+                wait = retry_after_seconds(e)
+                print(f"  ! Groq rate limit hit, waiting {wait:.0f}s", file=sys.stderr)
+                time.sleep(wait)
+            except Exception as e:  # keep crawling even if one summary fails
+                print(f"  ! Groq summary failed for '{s.name}': {e}", file=sys.stderr)
+                s.summary = text
+                break
 
 
 # --------------------------------------------------------------------------- #
 # Memgraph
 # --------------------------------------------------------------------------- #
-def write_graph(page_url: str, title: str, sections: list[Section]) -> tuple[int, int]:
+def write_graph(
+    page_url: str, title: str, sections: list[Section], requested_url: str | None = None
+) -> tuple[int, int]:
     nodes = edges = 0
 
     def tally(result) -> None:
@@ -334,6 +395,16 @@ def write_graph(page_url: str, title: str, sections: list[Section]) -> tuple[int
                 "MERGE (p:Page {url: $url}) SET p.title = $title",
                 url=page_url, title=title,
             ))
+            # A link pointed at a URL that redirected here: connect the two pages
+            if requested_url and url_key(requested_url) != url_key(page_url):
+                tally(session.run(
+                    """
+                    MATCH (p:Page {url: $url})
+                    MERGE (r:Page {url: $requested})
+                    MERGE (r)-[:REDIRECTS_TO]->(p)
+                    """,
+                    url=page_url, requested=requested_url,
+                ))
             for s in sections:
                 props = {"name": s.name, "role": s.role, "summary": s.summary}
                 if s.collapsed:
@@ -378,31 +449,35 @@ def write_graph(page_url: str, title: str, sections: list[Section]) -> tuple[int
                             id=a.id, target=a.navigates_to,
                         ))
 
-            print("\nConfirmation query:")
-            rows = session.run(
-                """
-                MATCH (p:Page)-[:HAS_SECTION]->(s)-[:HAS_ACTION]->(a)
-                WHERE p.url = $url
-                RETURN p.url, s.name, s.role, collect(a.label) AS actions
-                """,
-                url=page_url,
-            )
-            for r in rows:
-                print(f"  {r['p.url']} | {r['s.name']} | {r['s.role']} | {r['actions']}")
-
     return nodes, edges
+
+
+def print_confirmation(page_urls: list[str]) -> None:
+    print("\nConfirmation query:")
+    with GraphDatabase.driver(MEMGRAPH_URI, auth=AUTH) as driver, driver.session() as session:
+        rows = session.run(
+            """
+            MATCH (p:Page)-[:HAS_SECTION]->(s)-[:HAS_ACTION]->(a)
+            WHERE p.url IN $urls
+            RETURN p.url, s.name, s.role, collect(a.label) AS actions
+            """,
+            urls=page_urls,
+        )
+        for r in rows:
+            print(f"  {r['p.url']} | {r['s.name']} | {r['s.role']} | {r['actions']}")
 
 
 # --------------------------------------------------------------------------- #
 # Output
 # --------------------------------------------------------------------------- #
-def print_table(page_url: str, sections: list[Section]) -> None:
+def print_table(pages: list[tuple[str, list[Section]]]) -> None:
     rows = [("Page", "Section", "Role", "Actions count")]
-    for s in sections:
-        count = str(len(s.actions))
-        if s.collapsed:
-            count += f" (collapsed, {s.total_count} total)"
-        rows.append((page_url, s.name, s.role, count))
+    for page_url, sections in pages:
+        for s in sections:
+            count = str(len(s.actions))
+            if s.collapsed:
+                count += f" (collapsed, {s.total_count} total)"
+            rows.append((page_url, s.name, s.role, count))
     widths = [min(max(len(r[i]) for r in rows), 60) for i in range(4)]
     sep = "-+-".join("-" * w for w in widths)
     print()
@@ -418,25 +493,63 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description="Store a webpage's navigation graph in Memgraph.")
     parser.add_argument("url", help="URL of the page to crawl, e.g. https://example.com")
+    parser.add_argument(
+        "--depth", type=int, default=1,
+        help="how many clicks away from the start page to crawl, same site only (default: 1)",
+    )
+    parser.add_argument(
+        "--max-pages", type=int, default=5,
+        help="maximum number of pages to crawl, including the start page (default: 5)",
+    )
     args = parser.parse_args()
 
     load_dotenv()  # values already set in the shell take precedence
     if not os.environ.get("GROQ_API_KEY"):
         sys.exit("Error: GROQ_API_KEY must be set in the environment or in .env.")
 
-    print(f"Loading {args.url} ...")
-    page_url, title, html = fetch_html(args.url)
-    soup = BeautifulSoup(html, "html.parser")
+    crawled: list[tuple[str, list[Section]]] = []
+    nodes = edges = 0
+    site = urlparse(args.url).netloc.removeprefix("www.")
+    queue: deque[tuple[str, int]] = deque([(args.url, 0)])
+    seen = {url_key(args.url)}
 
-    sections = build_sections(soup, page_url)
-    if not sections:
-        sys.exit("No sections found on the page.")
-    print(f"Found {len(sections)} sections; summarizing with Groq ...")
-    summarize_sections(sections, page_url)
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        try:
+            while queue and len(crawled) < args.max_pages:
+                url, depth = queue.popleft()
+                print(f"\n[{len(crawled) + 1}/{args.max_pages}] Loading {url} (depth {depth}) ...")
+                try:
+                    page_url, title, html = fetch_page(browser, url)
+                except Exception as e:
+                    print(f"  ! could not load {url}: {e.__class__.__name__}", file=sys.stderr)
+                    continue
+                seen.add(url_key(page_url))
 
-    nodes, edges = write_graph(page_url, title, sections)
-    print_table(page_url, sections)
-    print(f"\nTotal nodes created: {nodes}")
+                sections = build_sections(BeautifulSoup(html, "html.parser"), page_url)
+                if not sections:
+                    print("  no sections found, skipping")
+                    continue
+                print(f"  {len(sections)} sections; summarizing with Groq ...")
+                summarize_sections(sections, page_url)
+                n, e = write_graph(page_url, title, sections, requested_url=url)
+                nodes, edges = nodes + n, edges + e
+                crawled.append((page_url, sections))
+
+                if depth < args.depth:
+                    for link in same_site_links(sections, site):
+                        if url_key(link) not in seen:
+                            seen.add(url_key(link))
+                            queue.append((link, depth + 1))
+        finally:
+            browser.close()
+
+    if not crawled:
+        sys.exit("No sections found on any page.")
+    print_confirmation([u for u, _ in crawled])
+    print_table(crawled)
+    print(f"\nPages crawled: {len(crawled)}")
+    print(f"Total nodes created: {nodes}")
     print(f"Total edges created: {edges}")
 
 
