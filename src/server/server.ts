@@ -5,12 +5,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
 import dotenv from 'dotenv';
-import { GraphBuilder } from '../graph/graphBuilder.js';
-import { PlaywrightExplorer } from '../explorer/playwrightExplorer.js';
 import { Neo4jService } from '../neo4j/neo4jClient.js';
-import { syncGraphToNeo4j } from '../neo4j/sync.js';
-import { generateCypherScript } from '../neo4j/cypherExporter.js';
-import type { CrawlerConfig, CrawlerEvent } from '../types/graph.js';
+import { SectionGraph, sectionGraphToCypher } from '../sections/sectionGraph.js';
+import { SectionCrawler } from '../sections/sectionCrawler.js';
+import type { SectionCrawlConfig, SectionCrawlEvent } from '../sections/types.js';
 
 dotenv.config();
 
@@ -25,13 +23,15 @@ app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
 // Global singletons
-const graphBuilder = new GraphBuilder();
+const graph = new SectionGraph();
 const neo4jService = new Neo4jService();
-let activeExplorer: PlaywrightExplorer | null = null;
+// Result of the most recent crawl, so a failed start is visible via /api/crawl/status
+let lastCrawl: { startUrl: string; startedAt: string; status: 'running' | 'completed' | 'failed' | 'stopped'; error?: string } | null = null;
+let activeExplorer: SectionCrawler | null = null;
 let crawlCompletion: Promise<void> | undefined;
 
 // Broadcast to connected WebSocket clients
-function broadcast(event: CrawlerEvent) {
+function broadcast(event: SectionCrawlEvent) {
   const payload = JSON.stringify(event, (key, value) => key === 'screenshotBase64' ? undefined : value);
   wss.clients.forEach((client) => {
     if (client.readyState === WebSocket.OPEN) {
@@ -42,26 +42,19 @@ function broadcast(event: CrawlerEvent) {
 
 // REST Endpoints
 
-// 1. Get current graph data (Cytoscape JSON + domain model)
+// 1. Get current graph data (Cytoscape JSON + section model, screenshots left out)
 app.get('/api/graph', (req, res) => {
-  const filter = (req.query.filter as 'states' | 'full' | 'workflows' | 'pages') || 'states';
-  const cyElements = graphBuilder.toCytoscapeElements(filter);
-  const model = graphBuilder.getModel();
+  const filter = (req.query.filter as 'sections' | 'actions' | 'pages') || 'sections';
+  const model = graph.getModel();
   res.json({
-    elements: cyElements,
-    stats: {
-      pagesCount: Object.keys(model.pages).length,
-      statesCount: Object.keys(model.states).length,
-      elementsCount: Object.keys(model.elements).length,
-      transitionsCount: Object.keys(model.transitions).length,
-      workflowsCount: Object.keys(model.workflows).length
-    },
-    model: { ...model, states: Object.fromEntries(Object.entries(model.states).map(([id, { screenshotBase64, ...state }]) => [id, state])) }
+    elements: graph.toCytoscape(filter),
+    stats: graph.stats(),
+    model: { ...model, pages: Object.fromEntries(Object.entries(model.pages).map(([id, { screenshotBase64, ...p }]) => [id, p])) }
   });
 });
 
-app.get('/api/graph/states/:id/screenshot', (req, res) => {
-  const image = graphBuilder.getModel().states[req.params.id]?.screenshotBase64;
+app.get('/api/graph/pages/screenshot', (req, res) => {
+  const image = graph.getModel().pages[String(req.query.id)]?.screenshotBase64;
   if (!image) return res.sendStatus(404);
   res.type('jpeg').send(Buffer.from(image, 'base64'));
 });
@@ -72,7 +65,7 @@ app.post('/api/crawl/start', async (req, res) => {
     return res.status(400).json({ error: 'A crawler is already running.' });
   }
 
-  const { startUrl, maxDepth = 3, maxStates = 20, headless = true, captureScreenshots = false, clearPrevious = true } = req.body;
+  const { startUrl, maxDepth = 2, maxPages = 10, headless = true, captureScreenshots = false } = req.body;
 
   try {
     if (typeof startUrl !== 'string' || !['http:', 'https:'].includes(new URL(startUrl).protocol)) {
@@ -82,27 +75,34 @@ app.post('/api/crawl/start', async (req, res) => {
     return res.status(400).json({ error: 'startUrl must be an HTTP or HTTPS URL.' });
   }
   const depth = Number(maxDepth);
-  const states = Number(maxStates);
-  if (!Number.isSafeInteger(depth) || depth < 0 || !Number.isSafeInteger(states) || states < 1) {
-    return res.status(400).json({ error: 'maxDepth must be a nonnegative integer and maxStates must be a positive integer.' });
-  }
-
-  if (clearPrevious) {
-    graphBuilder.clear();
+  const pages = Number(maxPages);
+  if (!Number.isSafeInteger(depth) || depth < 0 || !Number.isSafeInteger(pages) || pages < 1) {
+    return res.status(400).json({ error: 'maxDepth must be a nonnegative integer and maxPages must be a positive integer.' });
   }
 
   try {
-    const config: CrawlerConfig = {
+    const config: SectionCrawlConfig = {
       startUrl,
       maxDepth: depth,
-      maxStates: states,
+      maxPages: pages,
       headless: Boolean(headless),
       captureScreenshots: captureScreenshots === true,
       browserChannel: process.env.CRAWLER_BROWSER_CHANNEL
     };
+    graph.clear(startUrl);
 
-    activeExplorer = new PlaywrightExplorer(config, graphBuilder);
+    activeExplorer = new SectionCrawler(config, graph);
+    lastCrawl = { startUrl, startedAt: new Date().toISOString(), status: 'running' };
     activeExplorer.on('crawler_event', broadcast);
+    activeExplorer.on('crawler_event', (event: SectionCrawlEvent) => {
+      if (!lastCrawl) return;
+      if (event.type === 'error') {
+        lastCrawl.status = 'failed';
+        lastCrawl.error = (event.data as any)?.error;
+      } else if (event.type === 'complete' && lastCrawl.status !== 'failed') {
+        lastCrawl.status = 'completed';
+      }
+    });
     crawlCompletion = activeExplorer.start().catch(err => {
       console.error('Explorer error:', err);
     }).finally(() => {
@@ -110,7 +110,7 @@ app.post('/api/crawl/start', async (req, res) => {
       crawlCompletion = undefined;
     });
 
-    res.json({ message: 'Exploration started', config });
+    res.json({ message: 'Crawl started', config });
   } catch (err: any) {
     res.status(500).json({ error: err.message || String(err) });
   }
@@ -121,6 +121,7 @@ app.post('/api/crawl/stop', async (_req, res) => {
   if (activeExplorer) {
     const completion = crawlCompletion;
     await activeExplorer.stop();
+    if (lastCrawl && lastCrawl.status === 'running') lastCrawl.status = 'stopped';
     await completion;
     broadcast({
       type: 'log',
@@ -134,7 +135,7 @@ app.post('/api/crawl/stop', async (_req, res) => {
 
 // 4. Crawl Status
 app.get('/api/crawl/status', (_req, res) => {
-  res.json({ isCrawling: Boolean(activeExplorer) });
+  res.json({ isCrawling: Boolean(activeExplorer), lastCrawl });
 });
 
 // 5. Neo4j Status Check
@@ -143,17 +144,17 @@ app.get('/api/neo4j/status', async (_req, res) => {
   res.json(result);
 });
 
-// 6. Sync in-memory graph to Neo4j
+// 6. Write the section graph to the graph database (Neo4j or Memgraph, via Bolt)
 app.post('/api/neo4j/sync', async (_req, res) => {
   const session = neo4jService.getSession();
   if (!session) {
-    return res.status(503).json({ error: 'Cannot connect to Neo4j. Check NEO4J_URI in .env' });
+    return res.status(503).json({ error: 'Cannot connect to the graph database. Check NEO4J_URI in .env' });
   }
-
+  const started = Date.now();
   try {
-    const model = graphBuilder.getModel();
-    const stats = await syncGraphToNeo4j(session, model);
-    res.json({ success: true, stats });
+    const statements = sectionGraphToCypher(graph.getModel()).split('\n').filter(l => l.trim() && !l.startsWith('//'));
+    for (const statement of statements) await session.run(statement);
+    res.json({ success: true, stats: { ...graph.stats(), statements: statements.length, durationMs: Date.now() - started } });
   } catch (err: any) {
     res.status(500).json({ error: err.message || String(err) });
   } finally {
@@ -163,11 +164,9 @@ app.post('/api/neo4j/sync', async (_req, res) => {
 
 // 7. Export Cypher script (.cypher)
 app.get('/api/neo4j/cypher', (_req, res) => {
-  const model = graphBuilder.getModel();
-  const cypherScript = generateCypherScript(model);
   res.setHeader('Content-Type', 'text/plain');
-  res.setHeader('Content-Disposition', 'attachment; filename="website_graph.cypher"');
-  res.send(cypherScript);
+  res.setHeader('Content-Disposition', 'attachment; filename="website_sections.cypher"');
+  res.send(sectionGraphToCypher(graph.getModel()));
 });
 
 // Static assets

@@ -45,12 +45,12 @@
 
           <div class="grid-2">
             <div class="form-group">
-              <label for="input-max-states">Max States</label>
-              <input type="number" id="input-max-states" value="15" min="2" max="100" />
+              <label for="input-max-states">Max Pages</label>
+              <input type="number" id="input-max-states" value="10" min="1" max="100" />
             </div>
             <div class="form-group">
-              <label for="input-max-depth">Max Depth</label>
-              <input type="number" id="input-max-depth" value="3" min="1" max="10" />
+              <label for="input-max-depth">Link hops</label>
+              <input type="number" id="input-max-depth" value="2" min="0" max="10" />
             </div>
           </div>
 
@@ -61,7 +61,7 @@
 
           <div class="form-check">
             <input type="checkbox" id="check-screenshots" />
-            <label for="check-screenshots">Capture state screenshots</label>
+            <label for="check-screenshots">Capture page screenshots</label>
           </div>
 
           <div class="action-buttons">
@@ -84,19 +84,19 @@
             </div>
             <div class="metric-card">
               <span class="metric-val" id="metric-states">0</span>
-              <span class="metric-label">UI States</span>
+              <span class="metric-label">Sections</span>
             </div>
             <div class="metric-card">
               <span class="metric-val" id="metric-transitions">0</span>
-              <span class="metric-label">Transitions</span>
+              <span class="metric-label">Page links</span>
             </div>
             <div class="metric-card">
               <span class="metric-val" id="metric-elements">0</span>
-              <span class="metric-label">Elements</span>
+              <span class="metric-label">Actions</span>
             </div>
             <div class="metric-card full-width">
               <span class="metric-val" id="metric-workflows">0</span>
-              <span class="metric-label">Discovered Workflows</span>
+              <span class="metric-label">Linked pages not opened</span>
             </div>
           </div>
         </div>
@@ -107,10 +107,9 @@
           <div class="form-group">
             <label>Graph Detail Level</label>
             <select id="select-filter-mode">
-              <option value="states" selected>High-Level (Pages & UI States)</option>
-              <option value="full">Detailed (States + DOM Elements)</option>
-              <option value="pages">Sitemap</option>
-              <option value="workflows">Workflows Focus</option>
+              <option value="sections" selected>Pages &amp; sections</option>
+              <option value="actions">Pages, sections &amp; actions</option>
+              <option value="pages">Site map (pages only)</option>
             </select>
           </div>
           <div class="form-group">
@@ -135,11 +134,12 @@
 
         <!-- Legend Overlay -->
         <div class="legend-card">
-          <div class="legend-item"><span class="legend-color legend-page"></span> Page / Route</div>
-          <div class="legend-item"><span class="legend-color legend-state"></span> Screen UIState</div>
-          <div class="legend-item"><span class="legend-color legend-modal"></span> Modal / Dialog</div>
-          <div class="legend-item"><span class="legend-color legend-element"></span> Element (Button/Input)</div>
-          <div class="legend-item"><span class="legend-color legend-transition"></span> Action Transition</div>
+          <div class="legend-item"><span class="legend-color legend-page"></span> Page (opened)</div>
+          <div class="legend-item"><span class="legend-color legend-linked"></span> Page (linked, not opened)</div>
+          <div class="legend-item"><span class="legend-color legend-state"></span> Section</div>
+          <div class="legend-item"><span class="legend-color legend-modal"></span> Form / dialog section</div>
+          <div class="legend-item"><span class="legend-color legend-element"></span> Action</div>
+          <div class="legend-item"><span class="legend-color legend-transition"></span> Link to a page</div>
         </div>
 
         <!-- Bottom Log Drawer -->

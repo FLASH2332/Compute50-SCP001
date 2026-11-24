@@ -1,136 +1,53 @@
 # Web Graph Engine
 
-A robust, high-fidelity engine that converts any website into an interactive state-and-action knowledge graph. Built with **Playwright**, **Neo4j**, and **Cytoscape.js**.
+Turns a website into a graph of **pages → sections → actions**, using Playwright, with a Cytoscape.js viewer and export to Neo4j or Memgraph.
 
----
+The crawler opens pages and follows **same-site links only**. It never clicks buttons, types into fields or submits forms, so it is safe to run on real sites. Sites behind bot protection (e.g. Cloudflare "Just a moment…") are detected and reported, never bypassed.
 
-## 🎯 Architecture
+## Graph model
 
 ```
-                    ┌─────────────────────────┐
-                    │       Website URL       │
-                    └────────────┬────────────┘
-                                 │
-                                 ▼
-                    ┌─────────────────────────┐
-                    │   Playwright Explorer   │
-                    │  (State & Action Crawl) │
-                    └────────────┬────────────┘
-                                 │
-                                 ▼
-                    ┌─────────────────────────┐
-                    │      Graph Builder      │
-                    │  (Pages, States, Trans) │
-                    └──────┬───────────┬──────┘
-                           │           │
-            ┌──────────────┘           └──────────────┐
-            ▼                                         ▼
-┌─────────────────────────┐               ┌─────────────────────────┐
-│     Neo4j Database      │               │      Cytoscape.js       │
-│  (Cypher Storage & BI)  │               │   (Interactive Web UI)  │
-└─────────────────────────┘               └─────────────────────────┘
+(:Page)-[:HAS_SECTION]->(:Section)-[:HAS_ACTION]->(:Action)-[:NAVIGATES_TO]->(:Page)
 ```
 
----
+| Node | What it is |
+|---|---|
+| `Page` | One URL (tracking params, `#hash` and trailing slash removed). `crawled=false` means it is only known through a link. |
+| `Section` | A part of the page a visitor sees: `header`, `nav`, `main`, `sidebar`, `form`, `dialog`, `footer`, or a titled block (`content`, e.g. "FAQ"). Named from aria-label, its own heading, or its first links. |
+| `Action` | Something a visitor can do there: `link`, `button`, `submit`, `input` (with `inputType`: email, password, search…), `select`, `choice`, `tab`. Links store `href`; same-site links point to a `Page`. |
 
-## 🧩 Graph Data Model
+Repeats are grouped when there are more than 6: 3 are kept, each with `groupSize`. A repeat is a link at the same spot in a repeated card or row (product cards, story rows, e.g. 20 books), a control with the same label over and over ("hide", "Add to basket"), or addresses that differ only by a number (`/item/1`, `/item/2`). Plain menus and lists of different pages, and buttons with different labels (FAQ questions), are never grouped. When a card links to the same place twice (image + title), it is counted once.
 
-The graph structure models actual interactive website behavior rather than mere static hyperlinks:
+## Quick start
 
-1. **`Page`** — Represents a canonical URL route or document (`id`, `url`, `path`, `title`, `domain`).
-2. **`UIState`** — A distinct screen condition and interactive environment. Captures dynamic states like open modals, expanded drawers, active tabs, and filled forms even when the URL does not change.
-   - Distinct state fingerprints combine canonical URL + active modal/drawer/tab landmarks.
-   - Includes screenshot thumbnail preview and element counts.
-3. **`Element`** — Interactive controls on the screen (buttons, text inputs, dropdowns, links, checkboxes).
-   - Identified by stable selectors (`data-testid`, accessible role + label, CSS path).
-4. **`Action`** — User interactions executed on elements (`CLICK`, `FILL`, `SELECT`, `HOVER`, `NAVIGATE`).
-5. **`Transition`** — Directed edge connecting `UIState (A)` to `UIState (B)` via an `Action`. Distinguishes in-page state changes from full URL route navigations.
-6. **`Workflow`** — Multi-step sequences traversing states to achieve a goal (e.g. `Dashboard -> Modal: New Invoice -> Saved Invoice -> Alert View`).
-
-### Neo4j Graph Relationships
-```cypher
-(:Website)-[:HAS_PAGE]->(:Page)
-(:Page)-[:HAS_STATE]->(:UIState)
-(:UIState)-[:CONTAINS_ELEMENT]->(:Element)
-(:UIState)-[:TRANSITION {id, actionType, description, urlChanged}]->(:UIState)
-(:Element)-[:TRIGGERS {actionType}]->(:UIState)
-(:Workflow)-[:STARTS_AT]->(:UIState)
-(:Workflow)-[:ENDS_AT]->(:UIState)
-```
-
----
-
-## 🚀 Quick Start
-
-### 1. Install Dependencies
 ```bash
 npm install
 npx playwright install chromium
+npm start            # UI at http://localhost:3000
 ```
 
-### 2. Configure Environment (`.env`)
+In the UI: enter a URL, set **Max Pages** and **Link hops**, click **Start Graph Exploration**. Views: *Pages & sections*, *Pages, sections & actions*, *Site map*. Click any node for details.
+
+CLI:
+
 ```bash
-cp .env.example .env
+npm run crawl -- https://example.com 10 2            # writes website_sections.cypher
+npm run crawl -- https://example.com 10 2 --sync     # also writes to the database
 ```
-Default settings:
-```ini
-NEO4J_URI=bolt://localhost:7687
-NEO4J_USERNAME=neo4j
-NEO4J_PASSWORD=password123
-PORT=3000
-```
-> *Note: If Neo4j is offline or not installed, the engine continues running with in-memory storage, Cytoscape.js real-time visualization, and automatic `.cypher` export.*
 
-### 3. Start the Interactive Dashboard
+Database: set `NEO4J_URI`, `NEO4J_USERNAME`, `NEO4J_PASSWORD` in `.env` (see `.env.example`). Works with Neo4j and Memgraph over Bolt. Without a database, use **Export Cypher**.
+
+## Tests
+
 ```bash
-npm start
-```
-Open your browser at:
-- **Interactive Graph UI:** [http://localhost:3000](http://localhost:3000)
-- **Built-in Demo App:** [http://localhost:3000/demo](http://localhost:3000/demo)
-
-### 4. Or Run via CLI
-```bash
-# Syntax: npm run crawl <target_url> [max_states] [max_depth]
-npm run crawl http://localhost:3000/demo 15 3
+npm test
 ```
 
----
+`test/sections.test.ts` crawls a local fixture site and checks: sections are found and named, repeated cards are grouped while menus are kept, email/password fields are recorded, a closed dialog is marked hidden, no form is submitted (no POST request), and the Cypher export uses the schema above.
 
-## 📊 Cytoscape.js Visualizer Features
+## Example query
 
-- **Force-Directed & Hierarchical Layouts:** Switch between `CoSE`, `Breadthfirst`, `Concentric`, `Circle`, and `Grid`.
-- **Detail Filtering:**
-  - *High-Level:* Shows UIState transitions and exploration coverage.
-  - *Sitemap:* Shows observed pages and same-origin links, including destinations the crawler has yet to visit.
-  - *Detailed:* Expands to show individual interactive DOM Elements.
-  - *Workflows Focus:* Highlights end-to-end user journeys.
-- **Node Inspector:** Inspect state landmarks and coverage. Screenshots are opt-in in the dashboard or with the CLI flag `--screenshots`.
-- **Live Terminal Activity:** Real-time WebSocket streaming of browser actions, state discovery, and workflow detection.
-- **Direct Neo4j Sync & Export:** 1-click sync to Neo4j, or 1-click download of the complete `website_graph.cypher` script.
-
----
-
-## 🔍 Useful Neo4j Cypher Queries
-
-Once synced or imported into Neo4j:
-
-### Find all modal dialog states
 ```cypher
-MATCH (s:UIState {isModal: true})
-RETURN s.name, s.modalTitle, s.url
-```
-
-### Trace all paths from landing page to form submission
-```cypher
-MATCH path = (start:UIState)-[:TRANSITION*1..4]->(goal:UIState)
-WHERE start.name CONTAINS "Home" OR start.name CONTAINS "/"
-RETURN path LIMIT 25
-```
-
-### Identify high-degree bottleneck states
-```cypher
-MATCH (s:UIState)
-RETURN s.name, count{(s)-[:TRANSITION]->()} AS outgoing, count{()-[:TRANSITION]->(s)} AS incoming
-ORDER BY outgoing + incoming DESC
+MATCH path = (p:Page {url: "https://www.wemakedevs.org/hackathons/flagsmith"})-[:HAS_SECTION]->(:Section)-[:HAS_ACTION]->(:Action)
+RETURN path LIMIT 100
 ```

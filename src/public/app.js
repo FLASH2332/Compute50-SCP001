@@ -48,83 +48,49 @@ function initCytoscape() {
           'font-weight': 'bold'
         }
       },
-      // UIState Node
+      // Page known only through a link (not opened)
       {
-        selector: '.node-state',
-        style: {
-          'shape': 'round-rectangle',
-          'background-color': '#064e3b',
-          'border-color': '#10b981',
-          'width': '140px',
-          'height': '42px'
-        }
+        selector: '.node-page-linked',
+        style: { 'background-color': '#0b1220', 'border-style': 'dashed', 'font-weight': 'normal', 'color': '#93c5fd', 'height': '40px' }
       },
-      // Modal UIState Node
+      // Page that could not be read (bot check / error)
       {
-        selector: '.node-state-modal',
-        style: {
-          'shape': 'round-diamond',
-          'background-color': '#581c87',
-          'border-color': '#c084fc',
-          'border-width': 3,
-          'width': '180px',
-          'height': '56px',
-          'font-weight': 'bold'
-        }
+        selector: '.node-page-blocked',
+        style: { 'background-color': '#7f1d1d', 'border-color': '#f87171' }
       },
-      // Element Node
+      // Section
       {
-        selector: '.node-element',
-        style: {
-          'shape': 'ellipse',
-          'background-color': '#78350f',
-          'border-color': '#fbbf24',
-          'width': '40px',
-          'height': '40px',
-          'font-size': '9px'
-        }
-      },
-      // Edges: Transitions
-      {
-        selector: '.edge-transition-action',
-        style: {
-          'curve-style': 'bezier',
-          'target-arrow-shape': 'triangle',
-          'line-color': '#64748b',
-          'target-arrow-color': '#64748b',
-          'width': 2,
-          'label': 'data(label)',
-          'font-size': '10px',
-          'color': '#cbd5e1',
-          'text-background-color': '#0f172a',
-          'text-background-opacity': 0.9,
-          'text-background-padding': '2px'
-        }
+        selector: '.node-section',
+        style: { 'shape': 'round-rectangle', 'background-color': '#064e3b', 'border-color': '#10b981', 'width': '190px', 'height': '50px', 'font-size': '10px' }
       },
       {
-        selector: '.edge-transition-nav',
-        style: {
-          'curve-style': 'bezier',
-          'target-arrow-shape': 'triangle',
-          'line-color': '#38bdf8',
-          'target-arrow-color': '#38bdf8',
-          'width': 3,
-          'label': 'data(label)',
-          'font-size': '10px',
-          'color': '#7dd3fc',
-          'text-background-color': '#0f172a',
-          'text-background-opacity': 0.9,
-          'text-background-padding': '2px'
-        }
+        selector: '.node-section-form, .node-section-dialog',
+        style: { 'background-color': '#581c87', 'border-color': '#c084fc' }
       },
-      // Edge: Page -> State Containment
       {
-        selector: '.edge-containment',
+        selector: '.node-section-shared',
+        style: { 'border-style': 'double', 'border-width': 4, 'background-color': '#1e293b', 'border-color': '#64748b' }
+      },
+      {
+        selector: '.node-section-hidden',
+        style: { 'border-style': 'dashed', 'opacity': 0.75 }
+      },
+      // Action
+      {
+        selector: '.node-action',
+        style: { 'shape': 'round-rectangle', 'background-color': '#78350f', 'border-color': '#fbbf24', 'border-width': 1, 'width': '130px', 'height': '28px', 'font-size': '9px', 'text-max-width': '120px' }
+      },
+      // Edges
+      {
+        selector: '.edge-has-section, .edge-has-action',
+        style: { 'line-style': 'dashed', 'line-color': '#334155', 'target-arrow-shape': 'none', 'width': 1, 'curve-style': 'bezier' }
+      },
+      {
+        selector: '.edge-nav',
         style: {
-          'line-style': 'dashed',
-          'line-color': '#334155',
-          'target-arrow-shape': 'none',
-          'width': 1
+          'curve-style': 'bezier', 'target-arrow-shape': 'triangle', 'line-color': '#38bdf8', 'target-arrow-color': '#38bdf8', 'width': 2,
+          'label': 'data(label)', 'font-size': '9px', 'color': '#7dd3fc',
+          'text-background-color': '#0f172a', 'text-background-opacity': 0.9, 'text-background-padding': '2px'
         }
       },
       // Selected Highlighting
@@ -191,23 +157,13 @@ function handleServerEvent(evt) {
       appendLog('info', evt.data.message);
       break;
 
-    case 'state_discovered':
-      appendLog('state', `State: ${evt.data.state.name} (${evt.data.state.id})`);
-      fetchGraphData(); // Refresh Cytoscape with incremental node
-      break;
-
-    case 'transition_discovered':
-      appendLog('transition', `Transition: ${evt.data.transition.description}`);
-      fetchGraphData();
-      break;
-
-    case 'workflow_detected':
-      appendLog('workflow', `Workflow: ${evt.data.name} (${evt.data.stepCount} steps)`);
+    case 'page_crawled':
+      appendLog('state', `Page: ${evt.data.page.url} - ${evt.data.sections} sections, ${evt.data.actions} actions`);
       fetchGraphData();
       break;
 
     case 'complete':
-      appendLog('workflow', `✓ Exploration complete! Total: ${evt.data.totalStates} states, ${evt.data.totalTransitions} transitions`);
+      appendLog('workflow', `Crawl complete: ${evt.data.pages} pages, ${evt.data.sections} sections, ${evt.data.actions} actions`);
       setCrawlerRunning(false);
       fetchGraphData();
       break;
@@ -215,6 +171,7 @@ function handleServerEvent(evt) {
     case 'error':
       appendLog('error', `Error: ${evt.data.error}`);
       setCrawlerRunning(false);
+      fetchGraphData();
       break;
   }
 }
@@ -229,10 +186,10 @@ async function fetchGraphData() {
 
     // Update Metrics
     document.getElementById('metric-pages').innerText = data.stats.pagesCount;
-    document.getElementById('metric-states').innerText = data.stats.statesCount;
-    document.getElementById('metric-transitions').innerText = data.stats.transitionsCount;
-    document.getElementById('metric-elements').innerText = data.stats.elementsCount;
-    document.getElementById('metric-workflows').innerText = data.stats.workflowsCount;
+    document.getElementById('metric-states').innerText = data.stats.sectionsCount;
+    document.getElementById('metric-transitions').innerText = data.stats.linksCount;
+    document.getElementById('metric-elements').innerText = data.stats.actionsCount;
+    document.getElementById('metric-workflows').innerText = data.stats.linkedPagesCount;
 
     // Update Cytoscape Graph
     cy.elements().remove();
@@ -250,7 +207,8 @@ function applyLayout() {
   const layoutName = document.getElementById('select-layout').value;
   if (layoutName === 'breadthfirst') {
     // Top-down flow: Page -> entry state -> next screens, like a user journey
-    const roots = cy.nodes('.node-page').filter(n => n.indegree(false) === 0);
+    const start = currentGraphModel && currentGraphModel.pages ? Object.values(currentGraphModel.pages).find(p => p.depth === 0 && p.crawled) : null;
+    const roots = start ? cy.getElementById(start.id) : cy.nodes('.node-page').filter(n => n.indegree(false) === 0);
     cy.layout({
       name: 'breadthfirst',
       directed: true,
@@ -298,89 +256,41 @@ function inspectItem(item) {
       </div>
     `;
 
+    const row = (label, value) => `<div class="detail-row"><div class="detail-label">${label}</div><div class="detail-val">${value}</div></div>`;
     if (data.type === 'Page') {
-      html += `
-        <div class="detail-row">
-          <div class="detail-label">Path</div>
-          <div class="detail-val">${escapeHtml(data.path)}</div>
-        </div>
-        <div class="detail-row">
-          <div class="detail-label">URL</div>
-          <div class="detail-val">${escapeHtml(data.url)}</div>
-        </div>
-      `;
-    } else if (data.type === 'UIState') {
-      html += `
-        <div class="detail-row">
-          <div class="detail-label">Is Modal / Dialog</div>
-          <div class="detail-val">${data.isModal ? 'Yes (' + (escapeHtml(data.modalTitle || 'Active')) + ')' : 'No'}</div>
-        </div>
-        <div class="detail-row">
-          <div class="detail-label">Interactive Elements</div>
-          <div class="detail-val">${data.elementCount || 0} discovered</div>
-        </div>
-        <div class="detail-row">
-          <div class="detail-label">Exploration coverage</div>
-          <div class="detail-val">${data.coverage || 'discovered'}</div>
-        </div>
-        ${data.inPlaceActions ? `<div class="detail-row">
-          <div class="detail-label">In-place actions (stay on this screen)</div>
-          <div class="detail-val">${data.inPlaceActions.map(a => `• ${String(a).replace(/</g, '&lt;')}`).join('<br>')}</div>
-        </div>` : ''}
-        <div class="detail-row">
-          <div class="detail-label">Active Landmarks</div>
-          <div class="detail-val">${data.activeLandmarks?.length ? escapeHtml(data.activeLandmarks.join(', ')) : 'None'}</div>
-        </div>
-      `;
-
-      if (data.hasScreenshot) {
-        html += `
-          <div class="detail-row">
-            <div class="detail-label">State Screenshot Preview</div>
-            <img class="screenshot-preview" src="/api/graph/states/${encodeURIComponent(data.id)}/screenshot" alt="State Preview" />
-          </div>
-        `;
+      html += row('URL', escapeHtml(data.url));
+      html += row('Status', data.crawled ? escapeHtml(data.status === 'ok' ? 'Opened and read' : data.status === 'bot-check' ? 'Blocked by a bot-protection check (not bypassed)' : `Could not open: ${data.error || ''}`) : 'Linked from a crawled page, not opened (limit reached)');
+      html += row('Link hops from start', escapeHtml(data.depth));
+      if (currentGraphModel && data.crawled) {
+        const secs = Object.values(currentGraphModel.sections).filter(s => s.pageId === data.id).sort((a, b) => a.order - b.order);
+        html += row(`Sections (${secs.length})`, secs.map(s => `- ${escapeHtml(s.role)}: ${escapeHtml(s.name)} (${s.actionCount} actions)`).join('<br>') || 'None');
       }
-    } else if (data.type === 'Element') {
-      html += `
-        <div class="detail-row">
-          <div class="detail-label">Type & Tag</div>
-          <div class="detail-val">&lt;${escapeHtml(data.tag)}&gt; (${escapeHtml(data.elementType)})</div>
-        </div>
-        <div class="detail-row">
-          <div class="detail-label">Playwright Selector</div>
-          <div class="detail-val">${escapeHtml(data.selector)}</div>
-        </div>
-      `;
+      if (data.hasScreenshot) html += row('Screenshot', `<img class="screenshot-preview" src="/api/graph/pages/screenshot?id=${encodeURIComponent(data.id)}" alt="Page screenshot" />`);
+    } else if (data.type === 'Section') {
+      html += row('Role', escapeHtml(data.role) + (data.hidden ? ' (in the page but not visible, e.g. a closed dialog)' : ''));
+      html += row('Summary', escapeHtml(data.summary));
+      html += row('Actions', `${data.actionCount}${data.totalActions > data.actionCount ? ` shown (${data.totalActions} found; repeated links grouped)` : ''}`);
+      if (currentGraphModel) {
+        const acts = Object.values(currentGraphModel.actions).filter(a => a.sectionId === data.id);
+        html += row('What a visitor can do here', acts.map(a => `- ${escapeHtml(a.type)}${a.inputType ? ' (' + escapeHtml(a.inputType) + ')' : ''}: ${escapeHtml(a.label)}${a.groupSize ? ` <i>x${a.groupSize}</i>` : ''}${a.href ? ` &rarr; <span style="opacity:.7">${escapeHtml(a.href)}</span>` : ''}${a.external ? ' (other site)' : ''}`).join('<br>') || 'None');
+      }
+    } else if (data.type === 'Action') {
+      html += row('Type', escapeHtml(data.actionType) + (data.inputType ? ` (${escapeHtml(data.inputType)})` : ''));
+      html += row('Selector', escapeHtml(data.selector));
+      if (data.href) html += row('Goes to', escapeHtml(data.href) + (data.external ? ' (other site)' : ''));
+      if (data.groupSize) html += row('Repeated', `Stands for ${data.groupSize} similar links`);
+      html += row('Visible on load', data.visible ? 'Yes' : 'No (e.g. inside a closed menu)');
     }
 
     contentEl.innerHTML = html;
   } else {
-    // Edge / Transition
-    titleEl.innerText = data.type === 'LINKS_TO' ? 'Page link' : 'Transition';
-    badgeEl.innerText = data.actionType || (data.type === 'LINKS_TO' ? 'Link' : 'Action');
-
+    titleEl.innerText = data.type === 'NAVIGATES_TO' ? 'Link to page' : 'Contains';
+    badgeEl.innerText = data.type;
+    const list = Array.isArray(data.actions) ? data.actions.map(a => `- ${escapeHtml(a)}`).join('<br>') : escapeHtml(data.label || '');
     contentEl.innerHTML = `
-      <div class="detail-row">
-        <div class="detail-label">Description</div>
-        <div class="detail-val">${escapeHtml(data.description || data.label || 'Transition')}</div>
-      </div>
-      <div class="detail-row">
-        <div class="detail-label">Action Type</div>
-        <div class="detail-val">${escapeHtml(data.actionType || (data.type === 'LINKS_TO' ? 'Link' : 'CLICK'))}</div>
-      </div>
-      <div class="detail-row">
-        <div class="detail-label">From State</div>
-        <div class="detail-val">${escapeHtml(data.source)}</div>
-      </div>
-      <div class="detail-row">
-        <div class="detail-label">To State</div>
-        <div class="detail-val">${escapeHtml(data.target)}</div>
-      </div>
-      <div class="detail-row">
-        <div class="detail-label">URL Changed</div>
-        <div class="detail-val">${data.urlChanged ? 'Yes' : 'No (Dynamic In-Page State)'}</div>
-      </div>
+      <div class="detail-row"><div class="detail-label">From</div><div class="detail-val">${escapeHtml(cy.getElementById(data.source).data('label') || data.source)}</div></div>
+      <div class="detail-row"><div class="detail-label">To</div><div class="detail-val">${escapeHtml(cy.getElementById(data.target).data('label') || data.target)}</div></div>
+      ${data.type === 'NAVIGATES_TO' ? `<div class="detail-row"><div class="detail-label">Links</div><div class="detail-val">${list}</div></div>` : ''}
     `;
   }
 }
@@ -416,13 +326,13 @@ function setupEventListeners() {
     const headless = document.getElementById('check-headless').checked;
 
     setCrawlerRunning(true);
-    appendLog('info', `Starting exploration of ${startUrl}...`);
+    appendLog('info', `Starting crawl of ${startUrl} (links only; nothing is clicked or submitted)...`);
 
     try {
       const res = await fetch('/api/crawl/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ startUrl, maxStates, maxDepth, headless, captureScreenshots })
+        body: JSON.stringify({ startUrl, maxPages: maxStates, maxDepth, headless, captureScreenshots })
       });
       const data = await res.json();
       if (data.error) {
@@ -450,12 +360,11 @@ function setupEventListeners() {
       const res = await fetch('/api/neo4j/sync', { method: 'POST' });
       const data = await res.json();
       if (data.success) {
-        alert(`Neo4j Sync Succeeded in ${data.stats.durationMs}ms!\n\n` +
-          `- Pages: ${data.stats.pagesSynced}\n` +
-          `- UIStates: ${data.stats.statesSynced}\n` +
-          `- Elements: ${data.stats.elementsSynced}\n` +
-          `- Transitions: ${data.stats.transitionsSynced}\n` +
-          `- Workflows: ${data.stats.workflowsSynced}`);
+        alert(`Graph database sync done in ${data.stats.durationMs}ms\n\n` +
+          `- Pages: ${data.stats.pagesCount} (+${data.stats.linkedPagesCount} linked)\n` +
+          `- Sections: ${data.stats.sectionsCount}\n` +
+          `- Actions: ${data.stats.actionsCount}\n` +
+          `- Page links: ${data.stats.linksCount}`);
       } else {
         alert(`Neo4j Sync Notice: ${data.error}\n\nTip: You can download the .cypher file via "Export Cypher" anytime.`);
       }

@@ -310,6 +310,7 @@ body {
 }
 
 .legend-page { background: #38bdf8; }
+.legend-linked { background: transparent; border: 1px dashed #38bdf8; }
 .legend-state { background: #10b981; }
 .legend-modal { background: #c084fc; }
 .legend-element { background: #fbbf24; }

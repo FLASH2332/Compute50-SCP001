@@ -43,8 +43,15 @@ export class Neo4jService {
       return { connected: false, error: 'Could not obtain session' };
     }
     try {
-      const res = await session.run('CALL dbms.components() YIELD name, versions, edition RETURN name, versions[0] AS version, edition');
-      const version = res.records[0]?.get('version') || 'Neo4j 5.x';
+      let version = 'connected';
+      try {
+        const res = await session.run('CALL dbms.components() YIELD name, versions, edition RETURN name, versions[0] AS version, edition');
+        version = res.records[0]?.get('version') || 'Neo4j';
+      } catch {
+        // Memgraph (and other Bolt databases) don't have dbms.components()
+        await session.run('RETURN 1');
+        version = 'Bolt database';
+      }
       this.isConnected = true;
       return { connected: true, version };
     } catch (err: any) {
