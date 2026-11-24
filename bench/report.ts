@@ -18,10 +18,14 @@ const arg = (n: string) => { const i = process.argv.indexOf('--' + n); return i 
 
 const wanted = arg('sessions')?.split(',');
 const files = fs.existsSync(SESSIONS_DIR) ? fs.readdirSync(SESSIONS_DIR).filter(f => f.endsWith('.jsonl')) : [];
-const runs: RunRecord[] = files
+const allRuns: RunRecord[] = files
   .filter(f => !wanted || wanted.includes(f.replace(/\.jsonl$/, '')))
   .flatMap(f => fs.readFileSync(path.join(SESSIONS_DIR, f), 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l) as RunRecord));
-if (!runs.length) { console.error('No benchmark runs yet: npm run bench:run'); process.exit(1); }
+if (!allRuns.length) { console.error('No benchmark runs yet: npm run bench:run'); process.exit(1); }
+// Only runs made by the same harness code are comparable: by default, the harness of the latest run (--all-harness: every run)
+const latestHash = [...allRuns].sort((a, b) => a.at.localeCompare(b.at)).at(-1)!.benchHash;
+const runs = process.argv.includes('--all-harness') ? allRuns : allRuns.filter(r => r.benchHash === latestHash);
+const leftOut = allRuns.length - runs.length;
 
 const variants = [...new Set(runs.map(r => r.variant))].sort();
 const [A, B] = variants;
@@ -38,6 +42,7 @@ const lines: string[] = [];
 lines.push('# Graph variant benchmark', '');
 lines.push(`${runs.length} runs from ${sessions.length} session(s) (${sessions.join(', ')}); model ${[...new Set(runs.map(r => r.model))].join(', ')}.`);
 lines.push(`Same agent, tools and model for every run; only the graph differs. Variant order alternates task by task.`, '');
+if (leftOut) lines.push(`${leftOut} older run(s) made with different harness code were left out (harness ${latestHash} only; --all-harness to include them).`, '');
 if (variants.length !== 2) lines.push(`> Expected two variants, found: ${variants.join(', ')}`, '');
 
 // 1. Overall
