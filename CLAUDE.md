@@ -23,6 +23,7 @@ Read before changing code:
 - `bench/README.md` — the benchmark harness: graph-only MCP tools, the agent, the contract graph variants must keep.
 - `docs/FEATURES.md` — the full feature list: features to port (Tier 1, Tier 2, promoted ones) and new demo,
   onboarding and healing features, each tagged R1 / F / Later, plus the finals build order.
+- `docs/STATUS.md` — what the graph benchmark work has built, the first results, and what is pending.
 
 Rules that matter here:
 
