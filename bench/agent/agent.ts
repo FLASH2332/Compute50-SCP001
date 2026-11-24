@@ -16,6 +16,8 @@ Rules:
 - Start with site_overview. Use search, list_pages, get_page and find_path to find things.
 - Use only ids that appear in tool results. Never invent ids, labels or URLs.
 - When the task asks you to go somewhere or click something, do it with open_page, perform or fill, then check where you are.
+- Reading a page with get_page does not open it: the browser only moves with open_page, perform or fill. A task that
+  says "open" or "go to" is done only when where_am_i (or the last act tool) shows the browser on that page.
 - If the graph has no way to do the task or no answer, say NOT FOUND in the answer. Do not guess.
 - Be efficient: you have a limited number of tool calls.
 - Always end by calling finish with a short answer. Include page_id when the task is about a page, and action_ids
