@@ -23,6 +23,9 @@ export const config = {
     temperature: num(process.env.LLM_TEMPERATURE, 0),
     seed: num(process.env.LLM_SEED, 7),
     timeoutMs: num(process.env.LLM_TIMEOUT_MS, 120_000),
+    // Thinking models (Qwen 3.5, DeepSeek R1...): 'none' turns thinking off, which is much faster on a local GPU.
+    // Sent as `reasoning_effort` (Ollama's OpenAI API honours it). Empty: not sent, the model's default.
+    reasoningEffort: process.env.LLM_REASONING_EFFORT ?? 'none',
   },
   agent: {
     maxToolCalls: num(process.env.AGENT_MAX_TOOL_CALLS, 15),

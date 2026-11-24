@@ -34,6 +34,7 @@ docker run -d --name compute50-memgraph -p 7687:7687 memgraph/memgraph-mage
 LLM_BASE_URL=http://localhost:11434/v1   # Ollama; LM Studio: http://localhost:1234/v1
 LLM_MODEL=qwen2.5:7b-instruct            # must support tool calling
 LLM_API_KEY=local
+LLM_REASONING_EFFORT=none                # thinking models: none = thinking off (fast); empty = model default
 MEMGRAPH_URI=bolt://localhost:7687
 AGENT_MAX_TOOL_CALLS=15
 AGENT_MAX_MS=120000

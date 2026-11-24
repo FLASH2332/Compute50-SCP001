@@ -13,6 +13,7 @@ export async function chat(messages: Message[], tools: ToolSpec[]): Promise<Comp
   const body = {
     model: config.llm.model, messages, tools, tool_choice: 'auto',
     temperature: config.llm.temperature, seed: config.llm.seed, stream: false,
+    ...(config.llm.reasoningEffort ? { reasoning_effort: config.llm.reasoningEffort } : {}),
   };
   let lastError: unknown;
   for (let attempt = 0; attempt < 3; attempt++) {
