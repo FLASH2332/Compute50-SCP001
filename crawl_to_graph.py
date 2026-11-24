@@ -24,7 +24,7 @@ from playwright.sync_api import sync_playwright
 
 MEMGRAPH_URI = "bolt://localhost:7687"
 AUTH = ("", "")
-GROQ_MODEL = "llama-3.1-8b-instant"
+GROQ_MODEL = "openai/gpt-oss-20b"
 GROQ_PROMPT = "In one sentence, describe what a user can do in this section of a webpage."
 
 # Priority order for semantic regions, mapped to Section.role
@@ -285,20 +285,30 @@ def build_sections(soup: BeautifulSoup, page_url: str) -> list[Section]:
 # --------------------------------------------------------------------------- #
 # Summaries
 # --------------------------------------------------------------------------- #
+def reasoning_kwargs(model: str, effort: str = "low") -> dict:
+    """Extra Groq params for gpt-oss reasoning models; empty for other models."""
+    if "gpt-oss" in model:
+        return {"reasoning_effort": effort, "include_reasoning": False}
+    return {}
+
+
 def summarize_sections(sections: list[Section], page_url: str) -> None:
     client = Groq(api_key=os.environ["GROQ_API_KEY"])
+    model = os.environ.get("GROQ_MODEL") or GROQ_MODEL
     for s in sections:
         labels = ", ".join(a.label for a in s.actions) or "none"
         text = f"Section '{s.name}' on {page_url}. Role: {s.role}. Actions: {labels}"
         try:
             resp = client.chat.completions.create(
-                model=GROQ_MODEL,
+                model=model,
                 messages=[
                     {"role": "system", "content": GROQ_PROMPT},
                     {"role": "user", "content": text},
                 ],
                 temperature=0.2,
-                max_tokens=100,
+                # gpt-oss reasons before answering; reasoning tokens count toward max_tokens
+                max_tokens=512,
+                **reasoning_kwargs(model),
             )
             s.summary = (resp.choices[0].message.content or "").strip()
         except Exception as e:  # keep crawling even if one summary fails

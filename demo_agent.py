@@ -24,9 +24,9 @@ from groq import Groq
 from neo4j import GraphDatabase
 from playwright.sync_api import Page, sync_playwright
 
-from crawl_to_graph import AUTH, MEMGRAPH_URI, slugify
+from crawl_to_graph import AUTH, GROQ_MODEL, MEMGRAPH_URI, reasoning_kwargs, slugify
 
-DEFAULT_MODEL = "llama-3.3-70b-versatile"
+DEFAULT_MODEL = GROQ_MODEL
 MAX_TURNS = 12
 VIEWPORT = {"width": 1280, "height": 720}
 WORDS_PER_SECOND = 2.5
@@ -384,6 +384,7 @@ class DemoAgent:
                     tools=TOOLS,
                     tool_choice="auto",
                     temperature=0.3,
+                    **reasoning_kwargs(self.model, effort="medium"),
                 )
                 msg = resp.choices[0].message
                 if not msg.tool_calls:
@@ -427,14 +428,17 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Plan and record a narrated demo of a crawled page.")
     parser.add_argument("url")
     parser.add_argument("--out", default="demos", help="output folder (default: demos)")
-    parser.add_argument("--model", default=DEFAULT_MODEL, help=f"Groq model (default: {DEFAULT_MODEL})")
+    parser.add_argument(
+        "--model", help=f"Groq model (default: GROQ_MODEL from env, else {DEFAULT_MODEL})"
+    )
     args = parser.parse_args()
 
     load_dotenv()  # values already set in the shell take precedence
     if not os.environ.get("GROQ_API_KEY"):
         sys.exit("Error: GROQ_API_KEY must be set in the environment or in .env.")
 
-    agent = DemoAgent(args.url, Path(args.out), args.model)
+    model = args.model or os.environ.get("GROQ_MODEL") or DEFAULT_MODEL
+    agent = DemoAgent(args.url, Path(args.out), model)
     summary = agent.run()
     print("\n" + summary)
     if agent.result:
