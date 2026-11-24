@@ -1,3 +1,5 @@
+// Crawls in tests never call a model (site profile, guided picks, area names): fast and deterministic
+process.env.GRAPH_LLM ??= 'off';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { chromium } from 'playwright';

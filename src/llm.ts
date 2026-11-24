@@ -22,6 +22,8 @@ export async function connectGraphLlm(): Promise<GraphLlm | undefined> {
   const baseUrl = (env('LLM_BASE_URL') || 'http://localhost:11434/v1').replace(/\/$/, '');
   const model = env('LLM_MODEL') || 'qwen2.5:7b-instruct';
   const apiKey = env('LLM_API_KEY') || 'local';
+  // Thinking models: 'none' turns thinking off (see bench/config.ts); empty = the model's default
+  const effort = process.env.GRAPH_LLM_REASONING_EFFORT ?? process.env.LLM_REASONING_EFFORT ?? 'none';
   const headers = { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` };
   try {
     const res = await fetch(`${baseUrl}/models`, { headers, signal: AbortSignal.timeout(3000) });
@@ -42,6 +44,7 @@ export async function connectGraphLlm(): Promise<GraphLlm | undefined> {
           method: 'POST', headers, signal: AbortSignal.timeout(120_000),
           body: JSON.stringify({
             model, temperature: 0, seed: 7, max_tokens: maxTokens, response_format: { type: 'json_object' },
+            ...(effort ? { reasoning_effort: effort } : {}),
             messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
           }),
         });
