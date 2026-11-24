@@ -12,6 +12,7 @@ export interface LineContext {
   audience: string;
   isIntro: boolean;
   isLast: boolean;
+  targetSec?: number;  // the shot's planned length: the line is written to fill it
 }
 
 const lc = (s: string) => s.charAt(0).toLowerCase() + s.slice(1);
@@ -40,11 +41,14 @@ export interface VoiceDeps { speech: Speech; llm?: TextModel }
 
 export async function writeLine(c: LineContext, maxWords: number, llm?: TextModel, previous?: string, direction?: 'shorter' | 'longer'): Promise<string> {
   if (llm) {
-    const r = await llm.json<{ line: string }>(
-      'You write voice-over for product demo videos: one short, friendly spoken line per shot. Name buttons and fields exactly as they appear on screen, in “curly quotes”. No marketing fluff. No steps that are not listed.',
-      JSON.stringify({ audience: c.audience, shot: c.title, intent: c.intent, steps: c.steps.map(s => ({ action: s.op, label: s.label, value: s.value })), screenBefore: c.before, screenAfter: c.after, isIntro: c.isIntro, isLast: c.isLast, maxWords, previous, direction })
+    const r = await llm.json<Record<string, unknown>>(
+      'You write voice-over for product demo videos: the spoken narration for one shot. Write about aimForWords words (never more than maxWords) so the narration fills the shot: say what is being done and briefly why it is useful to this audience. Name buttons, fields and sections exactly as they appear on screen, in “curly quotes”. No marketing fluff. No steps that are not listed. Return {"line": "..."}.',
+      JSON.stringify({ audience: c.audience, shot: c.title, intent: c.intent, aimForWords: Math.max(4, Math.round(maxWords * 0.9)), steps: c.steps.map(s => ({ action: s.op, label: s.label, value: s.value })), screenBefore: c.before, screenAfter: c.after, isIntro: c.isIntro, isLast: c.isLast, maxWords, previous, direction })
     ).catch(() => null);
-    if (r?.line && words(r.line) <= maxWords + 3) return r.line.trim();
+    // Slightly long lines are fine: the fit loop shortens them or holds the last frame
+    // Models sometimes name the field differently ({"narration": ...}): take the first text value
+    const text = r && (typeof r.line === 'string' ? r.line : Object.values(r).find((v): v is string => typeof v === 'string'));
+    if (text && words(text) <= Math.ceil(maxWords * 1.5) + 3) return text.trim();
   }
   return fallbackLine(c, direction === 'shorter' && previous ? Math.min(maxWords, words(previous) - 3) : maxWords);
 }
@@ -52,6 +56,8 @@ export async function writeLine(c: LineContext, maxWords: number, llm?: TextMode
 const PAD = 0.6;       // voice starts 0.25 s in and should end ~0.35 s before the cut
 const MAX_HOLD = 2.5;
 const MAX_SPEED = 2.2;
+/** At most this much faster than the chosen style when fitting footage to the voice. */
+const MAX_FIT = 1.0;  // never faster than the style the user picked
 
 /**
  * Voice-over for one shot with fit-to-length (B1 R1):
@@ -61,7 +67,9 @@ const MAX_SPEED = 2.2;
 export async function voiceShot(shot: TimelineShot, c: LineContext, preset: Preset, voiceDir: string, runDir: string, deps: VoiceDeps, hint?: { direction?: 'shorter' | 'longer'; request?: string }): Promise<string[]> {
   const notes: string[] = [];
   const base = shot.segments.reduce((d, g) => d + segDuration(g), 0);
-  const budget = Math.max(4, Math.floor(base * (hint?.direction === 'shorter' ? 2.2 : 2.5)));
+  // Write for the time the shot has on screen (its footage, or its planned length if longer)
+  const span = Math.max(base, c.targetSec ? Math.min(c.targetSec, base * 1.6) : 0);
+  const budget = Math.max(4, Math.floor(span * (hint?.direction === 'shorter' ? 2.2 : 2.5)));
   let line = hint ? await writeLine({ ...c, intent: hint.request ? `${c.intent} (editor's request: ${hint.request})` : c.intent }, budget, deps.llm, shot.voice?.line, hint.direction) : await writeLine(c, budget, deps.llm);
   let speech = await deps.speech.synthesize(line, voiceDir, preset.voiceSpeed);
   for (let i = 0; i < 2 && speech.duration + PAD > base + MAX_HOLD; i++) {
@@ -77,18 +85,30 @@ export async function voiceShot(shot: TimelineShot, c: LineContext, preset: Pres
     shot.hold = Math.round((want - base) * 1000) / 1000;
     if (shot.hold > MAX_HOLD) notes.push(`${shot.shotId}: voice is ${shot.hold.toFixed(1)}s longer than the footage; holding the last frame`);
   } else if (base > want + 0.35) {
-    // Speed up the slow parts (never past 2.2×; typing is already fast) until the shot fits the voice
+    // Footage longer than the voice: first ask for a fuller line (LLM), then speed up a little
+    for (let i = 0; i < 2 && deps.llm && base > speech.duration + PAD + 1.2 && !hint?.direction; i++) {
+      const longer = await writeLine(c, Math.floor(base * 2.5), deps.llm, line, 'longer');
+      if (longer === line || words(longer) <= words(line)) break;
+      const s2 = await deps.speech.synthesize(longer, voiceDir, preset.voiceSpeed);
+      if (s2.duration + PAD > base + 0.3) break;
+      line = longer;
+      speech = s2;
+    }
+    const want = speech.duration + PAD;
+    // With an LLM the line was written to fill the shot, so keep the user's pace; without one, tighten a little
+    const fit = deps.llm ? MAX_FIT : 1.3;
+    const cap = (g: { speed: number }) => Math.max(g.speed, Math.min(MAX_SPEED, preset.speed * fit));
     for (let i = 0; i < 4; i++) {
       const now = shot.segments.reduce((d, g) => d + segDuration(g), 0);
       if (now <= want + 0.35) break;
-      const slow = shot.segments.filter(g => g.speed < MAX_SPEED);
+      const slow = shot.segments.filter(g => g.speed < cap(g) - 1e-6);
       if (!slow.length) break;
       const slowDur = slow.reduce((d, g) => d + segDuration(g), 0);
       const f = slowDur / Math.max(0.1, slowDur - (now - want));
-      for (const g of slow) g.speed = Math.round(Math.min(MAX_SPEED, g.speed * f) * 1000) / 1000;
+      for (const g of slow) g.speed = Math.round(Math.min(cap(g), g.speed * f) * 1000) / 1000;
     }
     const after = shot.segments.reduce((d, g) => d + segDuration(g), 0);
-    if (after > want + 1) notes.push(`${shot.shotId}: footage is ${(after - want).toFixed(1)}s longer than the voice even at ${MAX_SPEED}×`);
+    if (after > want + 1) notes.push(`${shot.shotId}: ${(after - want).toFixed(1)}s of footage without narration (kept at the chosen pace)`);
   }
   shot.voice = { line, file: path.relative(runDir, path.join(voiceDir, speech.file)).replace(/\\/g, '/'), duration: speech.duration, words: speech.words, offset: 0.25 };
   return notes;

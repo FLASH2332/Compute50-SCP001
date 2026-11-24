@@ -31,7 +31,8 @@ export function checkTimeline(tl: Timeline, takes: Record<string, Take>, map: Ap
     t = Math.max(t, sp.b);
     prev = sp.id;
   }
-  if (tl.duration - t > SILENCE) out.push({ rule: 'silence', message: `${(tl.duration - t).toFixed(1)}s of silence at the end` });
+  // A short quiet tail is a natural ending; only a long one is flagged
+  if (tl.duration - t > SILENCE * 2) out.push({ rule: 'silence', message: `${(tl.duration - t).toFixed(1)}s of silence at the end` });
 
   for (const s of tl.shots) {
     if (s.voice && s.voice.offset + s.voice.duration > s.outDuration + FIT_TOLERANCE)

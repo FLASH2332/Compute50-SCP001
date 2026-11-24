@@ -14,7 +14,7 @@ export interface EditPlan { shotIds: string[]; op: EditOp; factor?: number; dire
 export async function planEdit(request: string, tl: Timeline, llm?: TextModel): Promise<EditPlan> {
   if (llm) {
     const r = await llm.json<EditPlan>(
-      'You edit a narrated product demo video. Map the request to the shots it touches and ONE operation: "re-voice" (change narration), "retime" (factor > 1 makes the shot shorter/faster, < 1 longer), or "re-record" (record the screen again). Touch as few shots as possible.',
+      'You edit a narrated product demo video. Map the request to the shots it touches and ONE operation: "re-voice" (change narration), "retime" (factor > 1 makes the shot shorter/faster, < 1 longer), or "re-record" (record the screen again). Touch as few shots as possible. Return {"shotIds": ["shot1"], "op": "re-voice" | "retime" | "re-record", "factor": 1.3, "direction": "shorter" | "longer", "why": "..."}.',
       JSON.stringify({ request, shots: tl.shots.map(s => ({ id: s.shotId, title: s.title, chapter: s.chapter, seconds: s.outDuration, narration: s.voice?.line })) })
     ).catch(() => null);
     if (r?.shotIds?.length && ['re-voice', 'retime', 're-record'].includes(r.op)) {

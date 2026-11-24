@@ -300,7 +300,7 @@ describe('fixture app', () => {
     fs.mkdirSync(path.join(runDir, 'takes'));
     const flows = candidateFlows(map, start());
     const invite = flows.find(f => f.name === 'Invite member')!;
-    const sb = buildStoryboard('invite', '', 20, [invite], map, map.baseStateOf(start())!.id);
+    const sb = buildStoryboard('invite', '', 10, [invite], map, map.baseStateOf(start())!.id);
     const env = { runDir, map, changes: new ChangeLog(), gate: new Gate(new Set(sb.approvedActions)), flows, log: quiet };
     try {
       const shot = sb.shots[1];
@@ -369,7 +369,7 @@ describe('fixture app', () => {
   test('plug and play: the agent runs from a plain AppMap with no graph engine involved', async () => {
     const runsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'demo-agent-'));
     const plain = new AppMap(JSON.parse(JSON.stringify(map.data)));   // e.g. loaded from any store
-    const agent = createDemoAgent({ runsDir, services: { approver: new AutoApprover('fast'), speech: new SilentSpeech(), log: quiet } });
+    const agent = createDemoAgent({ runsDir, services: { approver: new AutoApprover('fast', false), speech: new SilentSpeech(), log: quiet } });
     try {
       const r = await agent.make({ map: plain, goal: 'open the reports', seconds: 12, deepen: false, extras: false });
       assert.ok(r.mp4 && fs.existsSync(r.mp4));

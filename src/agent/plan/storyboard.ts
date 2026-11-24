@@ -106,7 +106,7 @@ export async function reviseStoryboard(sb: Storyboard, request: string, flows: F
   }
   if (llm) {
     const r = await llm.json<{ keep: string[]; targetSec?: number; titles?: Record<string, string> }>(
-      'Revise a demo storyboard per the request. Return the shot ids to keep in the new order, optionally a new total length and new shot titles.',
+      'Revise a demo storyboard per the request. Return the shot ids to keep in the new order, optionally a new total length and new shot titles. Return {"keep": ["shot1", ...], "targetSec": 60, "titles": {"shot2": "..."}}.',
       JSON.stringify({ request, targetSec: sb.targetSec, shots: sb.shots.map(s => ({ id: s.id, title: s.title, intent: s.intent })) })
     ).catch(() => null);
     if (r?.keep?.length) {

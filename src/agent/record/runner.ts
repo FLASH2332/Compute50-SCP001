@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium, type Browser, type Page } from 'playwright';
-import type { AppMap, Box } from '../core/appMap.js';
+import { urlTemplate, type AppMap, type Box } from '../core/appMap.js';
 import type { BrowserHooks, TextModel, VisionModel } from '../core/ports.js';
 import type { ChangeLog } from '../nav/changes.js';
 import type { Gate } from '../nav/gate.js';
@@ -19,7 +19,7 @@ import { settle } from '../util/pageReady.js';
 const OVERLAY = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'overlay.js'), 'utf8');
 export const VIDEO = { width: 1280, height: 720 };
 
-export type TakeEventType = 'setup_end' | 'shot_start' | 'step_start' | 'located' | 'act' | 'typing_start' | 'typing_end' | 'nav_start' | 'ready' | 'step_end' | 'shot_end' | 'busy' | 'replan';
+export type TakeEventType = 'setup_end' | 'shot_start' | 'step_start' | 'located' | 'act' | 'typing_start' | 'typing_end' | 'nav_start' | 'ready' | 'step_end' | 'shot_end' | 'busy' | 'replan' | 'hold_start' | 'hold_end';
 export interface TakeEvent { t: number; type: TakeEventType; stepId?: string; box?: Box; via?: string }
 
 export interface StepResult { stepId: string; status: 'pass' | 'fail'; via?: string; healed?: boolean; start: number; end: number; box?: Box; reason?: string; label?: string; url?: string }
@@ -141,7 +141,7 @@ export async function recordShot(env: RunnerEnv, shot: Shot, attempt = 1): Promi
       try {
         if (step.op === 'show') await showSection(page, env, step, ev, res);
         else if (step.op === 'open_result') await openResult(page, step, ev, res);
-        else if (step.op === 'goto') { ev('act', { stepId: id }); await load(ctx, step.value!); }
+        else if (step.op === 'goto') { if (urlTemplate(page.url()) !== urlTemplate(step.value!)) { ev('act', { stepId: id }); await load(ctx, step.value!); } }
         else {
           const at = await performAction(ctx, env.map.controls[step.actionId], step.op, step.value);
           res.via = at.via; res.healed = at.healed; res.box = at.box;
@@ -159,14 +159,14 @@ export async function recordShot(env: RunnerEnv, shot: Shot, attempt = 1): Promi
         // A search or a result click must lead somewhere real; the new page joins the map
         const blocked = await page.evaluate(() => /just a moment|verify you are (a )?human|access denied|captcha/i.test(document.title + ' ' + (document.body?.innerText || '').slice(0, 300))).catch(() => false);
         if (blocked) throw new TakeFailed(id, `the site showed a bot check at ${page.url()}; the agent does not bypass these`);
-        if ((step.op === 'open_result' || step.op === 'goto') && page.url() === urlBefore) throw new TakeFailed(id, 'the page did not change');
+        if (step.op === 'open_result' && page.url() === urlBefore) throw new TakeFailed(id, 'the page did not change');
         if (page.url() !== urlBefore) { env.map.addPage(page.url(), await page.title().catch(() => '')); res.url = page.url(); }
       } else {
         const landed = (await locateState(page, env.map)).state?.id;
         if (landed !== step.to) throw new TakeFailed(id, `expected to land in ${step.to}, got ${landed ?? 'an unknown state'}`);
       }
+      await hold(page, step, shot, i, windowStart, now, events, ev, res);
       await page.evaluate(() => (window as any).__demo?.clear()).catch(() => {});
-      await page.waitForTimeout(600);
       res.status = 'pass';
       res.end = now();
       ev('step_end', { stepId: id });
@@ -312,4 +312,40 @@ async function openResult(page: Page, step: FlowStep, ev: Emit, res: StepResult)
     await opened.close().catch(() => {});
     if (url && url !== 'about:blank') await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
   }
+}
+
+/**
+ * Paces a shot to its planned length: after each step, hold until the shot's
+ * on-screen time (what survives the cuts: page loads removed, typing at 3x)
+ * reaches its share of the shot's target. Holds are marked so the cutter keeps
+ * them. While holding on a section or a new page, scroll gently through it.
+ */
+async function hold(page: Page, step: FlowStep, shot: Shot, i: number, windowStart: number, now: () => number, events: TakeEvent[], ev: Emit, res: StepResult) {
+  const n = shot.stepIds.length;
+  const cutSoFar = (() => {
+    let cut = 0;
+    for (const e of events) {
+      if (e.t < windowStart) continue;
+      if (e.type === 'nav_start') { const r = events.find(x => x.type === 'ready' && x.stepId === e.stepId && x.t >= e.t); if (r && r.t - e.t > 0.3) cut += r.t - e.t - 0.3; }
+      if (e.type === 'typing_start') { const d = events.find(x => x.type === 'typing_end' && x.stepId === e.stepId && x.t >= e.t); if (d) cut += (d.t - e.t) * (2 / 3); }
+    }
+    return cut;
+  })();
+  const onScreen = now() - windowStart - cutSoFar;
+  const due = (shot.targetSec * (i + 1)) / n;
+  const wait = Math.max(0.6, Math.min(14, due - onScreen));
+  ev('hold_start', { stepId: step.id });
+  const browsing = step.op === 'show' || step.op === 'goto' || step.op === 'open_result' || step.op === 'search' || (res.url !== undefined);
+  if (browsing && wait > 2.5) {
+    // Let the viewer read: scroll down through the content, a little at a time
+    const tall = step.op === 'show' && res.box ? Math.max(0, res.box.height - 500) : 600;
+    const ticks = Math.max(1, Math.floor((wait - 1.2) / 0.6));
+    const by = Math.min(220, Math.max(60, tall / ticks));
+    await page.waitForTimeout(800);
+    for (let k = 0; k < ticks; k++) { await page.mouse.wheel(0, by); await page.waitForTimeout(600); }
+    await page.waitForTimeout(Math.max(0, (wait - 0.8 - ticks * 0.6) * 1000));
+  } else {
+    await page.waitForTimeout(wait * 1000);
+  }
+  ev('hold_end', { stepId: step.id });
 }

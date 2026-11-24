@@ -105,7 +105,8 @@ export function stateIdOf(template: string, dialog: string, tab: string): string
 export function urlTemplate(rawUrl: string): string {
   try {
     const u = new URL(rawUrl);
-    let path = u.pathname.replace(/\/index\.html?$/i, '/');
+    // Drop tracking tails some sites put in the path itself (/explore&ref=x, /page;jsessionid=y)
+    let path = u.pathname.replace(/[&;].*$/, '').replace(/\/index\.html?$/i, '/');
     path = path.split('/').map(seg =>
       /^\d+$/.test(seg) || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(seg)
         || (/^[0-9a-z_-]{16,}$/i.test(seg) && /\d/.test(seg)) ? '{id}' : seg).join('/');

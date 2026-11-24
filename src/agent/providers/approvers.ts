@@ -3,8 +3,11 @@ import type { Approver } from '../core/ports.js';
 
 /** Approves everything; picks a fixed style. For scripts, tests and --yes. */
 export class AutoApprover implements Approver {
-  constructor(private styleName: 'fast' | 'calm' = 'calm') {}
-  async storyboard(): Promise<string> { return 'approve'; }
+  constructor(private styleName: 'fast' | 'calm' = 'calm', private print = true) {}
+  async storyboard(text: string): Promise<string> {
+    if (this.print) console.log(`\n${text}\n(auto-approved)\n`);
+    return 'approve';
+  }
   async style(): Promise<'fast' | 'calm'> { return this.styleName; }
 }
 

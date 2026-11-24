@@ -169,7 +169,7 @@ export async function findFlows(goal: string, audience: string, targetSec: numbe
   const usable = flows.filter(f => !f.broken);
   if (llm) {
     const reply = await llm.json<{ flowIds: string[]; vague: boolean; why: string }>(
-      'You plan product demo videos. Pick the flows (in demo order) that best serve the goal and audience within the time budget. Prefer fewer, complete flows. Set vague=true if the goal names no specific task.',
+      'You plan product demo videos. Pick the flows (in demo order) that best serve the goal and audience within the time budget. Prefer fewer, complete flows. Set vague=true if the goal names no specific task. Return {"flowIds": [...], "vague": false, "why": "..."}.',
       JSON.stringify({ goal, audience, targetSeconds: targetSec, flows: usable.map(f => ({ id: f.id, name: f.name, summary: f.summary, steps: f.steps.map(s => s.intent), estSeconds: estSeconds(f) })) })
     ).catch(() => null);
     const picked = reply?.flowIds?.map(id => usable.find(f => f.id === id)).filter((f): f is Flow => !!f) || [];

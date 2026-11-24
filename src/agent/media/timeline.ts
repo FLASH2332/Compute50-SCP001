@@ -56,6 +56,9 @@ export function cutSegments(take: Take, preset: Preset): Segment[] {
   const ev = take.events.filter(e => e.t >= start && e.t <= end).sort((a, b) => a.t - b.t);
   const cuts: [number, number][] = [];
   const fast: [number, number][] = [];
+  // Planned holds (the runner pacing a shot to its length) are kept, never cut as idle
+  const holds: [number, number][] = [];
+  for (const e of ev) if (e.type === 'hold_start') { const h = ev.find(x => x.type === 'hold_end' && x.stepId === e.stepId && x.t >= e.t); if (h) holds.push([e.t, h.t]); }
   for (const e of ev) {
     if (e.type === 'nav_start') {
       const ready = ev.find(r => r.type === 'ready' && r.t >= e.t && r.stepId === e.stepId);
@@ -70,7 +73,7 @@ export function cutSegments(take: Take, preset: Preset): Segment[] {
     const marks = [start, ...ev.map(e => e.t), end];
     for (let i = 1; i < marks.length; i++) {
       const gap = marks[i] - marks[i - 1];
-      const busy = fast.some(([x, y]) => marks[i - 1] < y && marks[i] > x); // typing is activity
+      const busy = [...fast, ...holds].some(([x, y]) => marks[i - 1] < y && marks[i] > x); // typing and holds are activity
       if (gap > 1.6 && !busy) cuts.push([marks[i - 1] + 0.6, marks[i] - 0.6]);
     }
   }

@@ -23,9 +23,9 @@ export interface PlanStep { kind: 'open_page' | 'show_section' | 'flow' | 'searc
 export interface DemoPlan { flows: Flow[]; why: string; by: 'llm' | 'rules'; steps: PlanStep[] }
 
 const SHOWN_ROLES = new Set(['main', 'content', 'form', 'sidebar']);
-const TOUR = /\b(all|every|overview|tour|features?|explore|around|what can|walk ?through)\b/i;
+const TOUR = /\b(all|every|overview|tour|features?|explore|explain|introduce|around|what can|walk ?through|show me around)\b/i;
 const SEARCHY = /\b(search|find|look(?:ing)? for|suggest|recommend|course|courses|tutorial|article|learn|about)\b/i;
-const NOT_TOPIC = new Set(['help', 'all', 'features', 'feature', 'suggest', 'recommend', 'find', 'search', 'look', 'looking', 'explore', 'overview', 'tour', 'website', 'site', 'page', 'pages', 'user', 'timer', 'first', 'good', 'best', 'some', 'any', 'then', 'also', 'give']);
+const NOT_TOPIC = new Set(['help', 'explain', 'introduce', 'then', 'there', 'here', 'all', 'features', 'feature', 'suggest', 'recommend', 'find', 'search', 'look', 'looking', 'explore', 'overview', 'tour', 'website', 'site', 'page', 'pages', 'user', 'timer', 'first', 'good', 'best', 'some', 'any', 'then', 'also', 'give']);
 
 interface Refs {
   pages: Map<string, AppPage>;          // P# → page
@@ -42,10 +42,11 @@ function buildRefs(map: AppMap, flows: Flow[]): Refs {
   const lines: string[] = [];
   const q = (s: string) => JSON.stringify(s.replace(/\s+/g, ' ').slice(0, 100));
   let si = 0, qi = 0;
+  const menu = mainPages(map);
   pages.forEach((p, i) => {
     const P = `P${i + 1}`;
     refs.pages.set(P, p);
-    lines.push(`${P} ${q(p.title)} ${new URL(p.url).pathname}`);
+    lines.push(`${P} ${q(p.title)} ${new URL(p.url).pathname}${menu.get(p.id) === 2 ? ' [main menu]' : menu.has(p.id) ? ' [linked from start]' : ''}`);
     for (const s of map.sectionsOfPage(p.id).filter(s => !s.hidden && SHOWN_ROLES.has(s.role)).slice(0, 12)) {
       const S = `S${++si}`;
       refs.sections.set(S, s);
@@ -83,23 +84,43 @@ function allowedFlows(map: AppMap, flows: Flow[]): Flow[] {
 export async function planDemo(map: AppMap, request: string, audience: string, seconds: number, llm?: TextModel): Promise<DemoPlan> {
   const known = allowedFlows(map, candidateFlows(map, urlTemplate(map.startUrl)));
   const refs = buildRefs(map, known);
+  let fallbackWhy = '';
   if (llm) {
-    const r = await llm.json<{ steps: PlanStep[]; why?: string }>(
+    // One retry: a transient API error should not silently drop to keyword rules
+    const ask = () => llm.json<{ steps: PlanStep[]; why?: string }>(
       [
         'You plan a short screen-recorded product demo of a website, from a map of the site, for the user\'s request.',
         'Use only these step kinds: open_page {ref:P#}, show_section {ref:S#} (a section of the CURRENT page), flow {ref:F#}, search {ref:Q#, query}, open_result {text}.',
         'Start on P1. Use open_page to move; show_section only for sections listed under the current page.',
         'After search, the results page is not in the map: follow it with open_result {text: what to click}, then you may open_result again on the next page.',
-        'Fit the time budget (about 3-5 seconds per step). Prefer the steps that answer the request; do not invent pages, sections or searches.',
+        'Cover EVERY part of the request, in the order asked. If it asks for an overview, all features or to explain the site, first visit the main pages ([main menu] / [linked from start], skip pagination) and show each one\'s key section, then do the specific task.',
+        `Use the whole time budget: plan about ${Math.max(4, Math.round(seconds / 6))} steps (each step is shown for ~5-7 seconds). Do not invent pages, sections or searches.`,
         'Return {"steps": [...], "why": "one sentence"}, for example {"steps": [{"kind": "open_page", "ref": "P2"}, {"kind": "show_section", "ref": "S5"}, {"kind": "search", "ref": "Q1", "query": "python"}, {"kind": "open_result", "text": "Python Tutorial"}], "why": "..."}.'
       ].join(' '),
       JSON.stringify({ request, audience, seconds, map: refs.text })
-    ).catch(() => null);
-    const steps = normalizeSteps(r?.steps);
+    );
+    let r: { steps: PlanStep[]; why?: string } | null = null;
+    for (let i = 0; i < 2 && !r; i++) r = await ask().catch(e => { fallbackWhy = `LLM call failed: ${(e as Error).message.split('\n')[0].slice(0, 160)}`; return null; });
+    let steps = normalizeSteps(r?.steps);
+    if (r && !steps.length) fallbackWhy = 'the LLM returned no usable steps';
+    let why = r?.why || 'Planned by the LLM from the site map.';
+    // An overview request must actually tour the site: add the main pages when the plan skipped them
+    if (steps.length && TOUR.test(request)) {
+      const visited = new Set(steps.filter(x => x.kind === 'open_page').map(x => x.ref));
+      const tour = tourSteps(map, refs, Math.max(12, seconds * 0.55));
+      const tourPages = tour.filter(x => x.kind === 'open_page' && x.ref !== 'P1').map(x => x.ref);
+      if (tourPages.filter(P => visited.has(P)).length < Math.min(2, tourPages.length)) {
+        const shown = new Set(tour.map(x => x.ref));
+        steps = [...tour, ...steps.filter(x => !((x.kind === 'open_page' || x.kind === 'show_section') && shown.has(x.ref)) && !(x.kind === 'open_page' && x.ref === 'P1'))];
+        why += ` Added a tour of ${tourPages.length + 1} main pages first, as the request asks for an overview.`;
+      }
+    }
     const built = steps.length ? toFlows(map, refs, steps, known) : null;
-    if (built && built.flows.length) return { ...built, why: r!.why || 'Planned by the LLM from the site map.', by: 'llm' };
+    if (built && built.flows.length) return { ...built, why, by: 'llm' };
   }
-  return rulesPlan(map, refs, known, request, audience, seconds);
+  const rules = await rulesPlan(map, refs, known, request, audience, seconds);
+  if (fallbackWhy) rules.why += ` (Used keyword rules because ${fallbackWhy}.)`;
+  return rules;
 }
 
 const KINDS = ['open_page', 'show_section', 'flow', 'search', 'open_result'] as const;
@@ -126,11 +147,46 @@ export function normalizeSteps(raw: unknown): PlanStep[] {
   return out;
 }
 
+/** Pages linked from the start page: 2 = from its menu/header, 1 = from elsewhere on it. */
+function mainPages(map: AppMap): Map<string, number> {
+  const start = map.pageByTemplate(urlTemplate(map.startUrl));
+  const startBase = start && map.baseStateOf(start.template);
+  const out = new Map<string, number>();
+  for (const e of Object.values(map.edges)) {
+    if (e.kind !== 'link' || e.from !== startBase?.id) continue;
+    const pid = map.states[e.to]?.pageId;
+    const role = map.controls[e.actionId]?.section?.role || '';
+    if (pid && pid !== start?.id) out.set(pid, Math.max(out.get(pid) || 0, ['nav', 'header'].includes(role) ? 2 : 1));
+  }
+  return out;
+}
+
+/** A tour: the start page, then the main pages (menu first; pagination and id pages skipped), each with its key sections. */
+function tourSteps(map: AppMap, refs: Refs, seconds: number): PlanStep[] {
+  const perPage = 7;
+  const menu = mainPages(map);
+  const ranked = [...refs.pages].filter(([P, p]) => P === 'P1' || (!p.template.includes('{id}') && !/page \d+/i.test(p.title)))
+    .sort(([A, a], [B, b]) => Number(B === 'P1') - Number(A === 'P1') || (menu.get(b.id) || 0) - (menu.get(a.id) || 0));
+  const pages = ranked.map(([P]) => P).slice(0, Math.max(2, Math.floor(seconds / perPage)));
+  const steps: PlanStep[] = [];
+  for (const P of pages) {
+    const page = refs.pages.get(P)!;
+    steps.push({ kind: 'open_page', ref: P });
+    // The start page gets two sections (it is the overview), the others one
+    const secs = [...refs.sections].filter(([, s]) => s.pageId === page.id && (s.role === 'main' || s.role === 'content')).slice(0, P === 'P1' ? 2 : 1);
+    for (const [S] of secs) steps.push({ kind: 'show_section', ref: S });
+  }
+  return steps;
+}
+
 /** Keyword rules: tour the main pages for broad requests, search for topics, else match known flows. */
 async function rulesPlan(map: AppMap, refs: Refs, known: Flow[], request: string, audience: string, seconds: number): Promise<DemoPlan> {
   const steps: PlanStep[] = [];
   const why: string[] = [];
-  const topic = promptTerms(request).filter(w => !NOT_TOPIC.has(w));
+  // Topic words: drop filler, request words like "explain", and the site's own name ("geeks", "geeksforgeeks")
+  const siteWords = promptTerms(`${new URL(map.startUrl).hostname.replace(/^www\./, '').split('.')[0]} ${refs.pages.get('P1')?.title || ''}`);
+  const siteName = new URL(map.startUrl).hostname.replace(/^www\./, '').split('.')[0].toLowerCase();
+  const topic = promptTerms(request).filter(w => !NOT_TOPIC.has(w) && !siteWords.includes(w) && !siteName.includes(w));
   // Prefer a search box on the start page, then any labelled as search
   const startPage = refs.pages.get('P1');
   const search = [...refs.searches].sort(([, a], [, b]) => Number(b.pageId === startPage?.id) - Number(a.pageId === startPage?.id)
@@ -139,27 +195,10 @@ async function rulesPlan(map: AppMap, refs: Refs, known: Flow[], request: string
   const wantsSearch = !!search && topic.length > 0 && SEARCHY.test(request);
   const wantsTour = TOUR.test(request) || (!wantsSearch && !topic.length);
   if (wantsTour) {
-    const perPage = 7;
-    // Main pages first: linked from the start page's menus; pagination and id pages are skipped
-    const startBase = startPage && map.baseStateOf(startPage.template);
-    const fromStart = new Map<string, number>();
-    for (const e of Object.values(map.edges)) {
-      if (e.kind !== 'link' || e.from !== startBase?.id) continue;
-      const pid = map.states[e.to]?.pageId;
-      const role = map.controls[e.actionId]?.section?.role || '';
-      if (pid) fromStart.set(pid, Math.max(fromStart.get(pid) || 0, ['nav', 'header'].includes(role) ? 2 : 1));
-    }
-    const ranked = [...refs.pages].filter(([P, p]) => P === 'P1' || (!p.template.includes('{id}') && !/page \d+/i.test(p.title)))
-      .sort(([A, a], [B, b]) => Number(B === 'P1') - Number(A === 'P1') || (fromStart.get(b.id) || 0) - (fromStart.get(a.id) || 0));
-    const pages = ranked.map(([P]) => P).slice(0, Math.max(1, Math.floor((wantsSearch ? budget * 0.5 : budget) / perPage)));
-    for (const P of pages) {
-      steps.push({ kind: 'open_page', ref: P });
-      const page = refs.pages.get(P)!;
-      const S = [...refs.sections].find(([, s]) => s.pageId === page.id && (s.role === 'main' || s.role === 'content'))?.[0];
-      if (S) steps.push({ kind: 'show_section', ref: S });
-      budget -= perPage;
-    }
-    why.push(`a tour of ${pages.length} main page(s)`);
+    const tour = tourSteps(map, refs, wantsSearch ? budget * 0.6 : budget);
+    steps.push(...tour);
+    budget -= tour.filter(x => x.kind === 'open_page').length * 7;
+    why.push(`a tour of ${tour.filter(x => x.kind === 'open_page').length} main page(s)`);
   }
   if (wantsSearch) {
     const query = topic.slice(0, 4).join(' ');
