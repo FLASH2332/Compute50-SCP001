@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Reports · Acme Invoicing</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <header>
+    <h1>Acme Invoicing Portal</h1>
+    <nav aria-label="Report period" role="tablist">
+      <button role="tab" aria-selected="true" data-target="monthly">Monthly</button>
+      <button role="tab" aria-selected="false" data-target="yearly">Yearly</button>
+    </nav>
+  </header>
+  <aside aria-label="App menu" class="app-menu">
+    <a href="index.html">Invoices</a>
+    <a href="members.html">Members</a>
+    <a href="reports.html">Reports</a>
+    <a href="help.html">Help</a>
+  </aside>
+  <main>
+    <section class="card" id="panel-monthly" aria-label="Monthly revenue">
+      <h2>Monthly revenue</h2>
+      <p style="margin-top:12px">November: $20,650.00 across 2 invoices.</p>
+    </section>
+    <section class="card" id="panel-yearly" aria-label="Yearly revenue" style="display:none">
+      <h2>Yearly revenue</h2>
+      <p style="margin-top:12px">2026 so far: $214,300.00 across 31 invoices.</p>
+    </section>
+  </main>
+  <script>
+    document.querySelectorAll('[role="tab"]').forEach(tab => tab.addEventListener('click', () => {
+      document.querySelectorAll('[role="tab"]').forEach(t => t.setAttribute('aria-selected', String(t === tab)));
+      document.getElementById('panel-monthly').style.display = tab.dataset.target === 'monthly' ? '' : 'none';
+      document.getElementById('panel-yearly').style.display = tab.dataset.target === 'yearly' ? '' : 'none';
+    }));
+  </script>
+</body>
+</html>

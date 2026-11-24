@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Help center · Acme Invoicing</title>
+  <link rel="stylesheet" href="app.css">
+  <style>
+    .search { display: flex; gap: 8px; margin: 12px 0; }
+    .search input { flex: 1; padding: 8px 12px; background: #0f172a; border: 1px solid var(--border); border-radius: 6px; color: #fff; }
+    .results a { display: block; padding: 10px 0; color: var(--primary); text-decoration: none; border-bottom: 1px solid var(--border); }
+  </style>
+</head>
+<body>
+  <header><h1>Acme Invoicing Portal</h1></header>
+  <aside aria-label="App menu" class="app-menu">
+    <a href="index.html">Invoices</a>
+    <a href="members.html">Members</a>
+    <a href="reports.html">Reports</a>
+    <a href="help.html">Help</a>
+  </aside>
+  <main>
+    <section class="card" aria-labelledby="help-heading">
+      <h2 id="help-heading">Help center</h2>
+      <form role="search" class="search" action="help.html" method="get">
+        <input type="search" name="q" aria-label="Search help articles" placeholder="Search help articles">
+        <button type="submit" class="btn">Search</button>
+      </form>
+      <div class="results" id="results"></div>
+    </section>
+    <section class="card" aria-labelledby="popular-heading">
+      <h2 id="popular-heading">Popular topics</h2>
+      <p style="margin-top:12px">Billing basics, team permissions and monthly reports.</p>
+    </section>
+  </main>
+  <script>
+    const articles = [
+      { title: 'How to create your first invoice', href: 'article-invoices.html' },
+      { title: 'Inviting teammates and choosing roles', href: 'article-members.html' }
+    ];
+    const q = new URLSearchParams(location.search).get('q');
+    if (q) {
+      document.querySelector('input[name="q"]').value = q;
+      const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+      const hits = articles.filter(a => words.some(w => a.title.toLowerCase().includes(w.replace(/s$/, ''))));
+      document.getElementById('results').innerHTML = `<p>${hits.length} result(s) for “${q.replace(/</g, '&lt;')}”</p>` +
+        hits.map(a => `<a href="${a.href}">${a.title}</a>`).join('');
+    }
+  </script>
+</body>
+</html>

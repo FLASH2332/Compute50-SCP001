@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Members · Acme Invoicing</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <header><h1>Acme Invoicing Portal</h1></header>
+  <aside aria-label="App menu" class="app-menu">
+    <a href="index.html">Invoices</a>
+    <a href="members.html">Members</a>
+    <a href="reports.html">Reports</a>
+    <a href="help.html">Help</a>
+  </aside>
+
+  <div id="invite-alert" class="alert" role="status">Invitation sent!</div>
+
+  <main>
+    <section class="card" aria-labelledby="members-heading">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <h2 id="members-heading">Team members</h2>
+        <button id="btn-invite" class="btn">Invite member</button>
+      </div>
+      <table>
+        <thead><tr><th>Name</th><th>Email</th><th>Role</th></tr></thead>
+        <tbody id="member-rows">
+          <tr><td>Pepper Potts</td><td>pepper@acme.test</td><td>Admin</td></tr>
+          <tr><td>Happy Hogan</td><td>happy@acme.test</td><td>Member</td></tr>
+        </tbody>
+      </table>
+    </section>
+  </main>
+
+  <div id="invite-backdrop" class="modal-backdrop">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="invite-heading">
+      <h2 id="invite-heading">Invite a teammate</h2>
+      <form id="invite-form" onsubmit="event.preventDefault(); sendInvite();">
+        <div class="form-group">
+          <label for="invite-email">Email address</label>
+          <input type="email" id="invite-email" name="email" placeholder="name@company.com" required>
+        </div>
+        <div class="form-group">
+          <label for="invite-role">Role</label>
+          <select id="invite-role" name="role">
+            <option value="member">Member</option>
+            <option value="admin">Admin</option>
+          </select>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" id="btn-invite-cancel">Cancel</button>
+          <button type="submit" class="btn" id="btn-send-invite">Send invite</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    const backdrop = document.getElementById('invite-backdrop');
+    document.getElementById('btn-invite').addEventListener('click', () => backdrop.classList.add('open'));
+    document.getElementById('btn-invite-cancel').addEventListener('click', () => backdrop.classList.remove('open'));
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') backdrop.classList.remove('open'); });
+    function sendInvite() {
+      const email = document.getElementById('invite-email').value || 'new@acme.test';
+      const role = document.getElementById('invite-role').selectedOptions[0].textContent;
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>(invited)</td><td>${email.replace(/</g, '&lt;')}</td><td>${role}</td>`;
+      document.getElementById('member-rows').appendChild(tr);
+      backdrop.classList.remove('open');
+      const alert = document.getElementById('invite-alert');
+      alert.style.display = 'block';
+      setTimeout(() => { alert.style.display = 'none'; }, 4000);
+    }
+  </script>
+</body>
+</html>
