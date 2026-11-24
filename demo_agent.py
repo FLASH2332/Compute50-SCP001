@@ -19,6 +19,7 @@ import sys
 import time
 from pathlib import Path
 
+from dotenv import load_dotenv
 from groq import Groq
 from neo4j import GraphDatabase
 from playwright.sync_api import Page, sync_playwright
@@ -429,8 +430,9 @@ def main() -> None:
     parser.add_argument("--model", default=DEFAULT_MODEL, help=f"Groq model (default: {DEFAULT_MODEL})")
     args = parser.parse_args()
 
+    load_dotenv()  # values already set in the shell take precedence
     if not os.environ.get("GROQ_API_KEY"):
-        sys.exit("Error: GROQ_API_KEY must be set in the environment.")
+        sys.exit("Error: GROQ_API_KEY must be set in the environment or in .env.")
 
     agent = DemoAgent(args.url, Path(args.out), args.model)
     summary = agent.run()

@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from urllib.parse import urljoin, urldefrag
 
 from bs4 import BeautifulSoup, Tag
+from dotenv import load_dotenv
 from groq import Groq
 from neo4j import GraphDatabase
 from playwright.sync_api import sync_playwright
@@ -409,8 +410,9 @@ def main() -> None:
     parser.add_argument("url", help="URL of the page to crawl, e.g. https://example.com")
     args = parser.parse_args()
 
+    load_dotenv()  # values already set in the shell take precedence
     if not os.environ.get("GROQ_API_KEY"):
-        sys.exit("Error: GROQ_API_KEY must be set in the environment.")
+        sys.exit("Error: GROQ_API_KEY must be set in the environment or in .env.")
 
     print(f"Loading {args.url} ...")
     page_url, title, html = fetch_html(args.url)

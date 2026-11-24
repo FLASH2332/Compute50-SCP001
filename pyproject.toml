@@ -12,6 +12,7 @@ dependencies = [
     "groq>=1.7.0",
     "neo4j>=6.4.1",
     "playwright>=1.65.2",
+    "python-dotenv>=1.2.4",
 ]
 
 [project.scripts]
