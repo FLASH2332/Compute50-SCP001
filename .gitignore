@@ -7,3 +7,8 @@ section-audit-*/
 .demo-runs/
 
 *.mp4
+
+# benchmark harness
+bench/snapshots/
+bench/results/
+bench/report/

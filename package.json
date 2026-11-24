@@ -9,9 +9,14 @@
     "dev": "tsx watch src/server/server.ts",
     "crawl": "tsx src/cli.ts",
     "build": "tsc",
-    "test": "tsx --test test/*.test.ts"
+    "test": "tsx --test test/*.test.ts",
+    "agent": "tsx bench/agent/cli.ts",
+    "bench:crawl": "tsx bench/crawl.ts",
+    "bench:mcp": "tsx bench/mcp/server.ts",
+    "bench:typecheck": "tsc -p bench/tsconfig.json"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.2",
     "cors": "^2.8.5",
     "cytoscape": "3.30.4",
     "dotenv": "^16.4.7",
@@ -19,7 +24,8 @@
     "groq-sdk": "^1.6.0",
     "neo4j-driver": "^5.28.1",
     "playwright": "^1.50.0",
-    "ws": "^8.18.0"
+    "ws": "^8.18.0",
+    "zod": "3.25.76"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",
