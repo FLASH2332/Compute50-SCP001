@@ -264,12 +264,12 @@ function toFlows(map: AppMap, refs: Refs, plan: PlanStep[], _known: Flow[]): { f
     if (cur === target.id) return true;
     if (chain || !cur) {
       // After a search we are on a page the map did not know: load the page by URL
-      (chain || newFlow(`Open ${p.title}`, target.id)).steps.push(step('goto', '', target.id, { value: p.url, label: p.title, intent: `Go to ${p.title}` }));
+      (chain || newFlow(`Open ${p.title}`, target.id)).steps.push(step('goto', '', target.id, { value: p.url, label: p.title, intent: `Go to ${p.title}`, route: true }));
       chain = null;
     } else {
       const path = linkPath(cur, target.id);
       const f = newFlow(`Open ${p.title}`, cur);
-      f.steps.push(...(path || [step('goto', cur, target.id, { value: p.url, label: p.title, intent: `Go to ${p.title}` })]));
+      f.steps.push(...(path ? path.map(x => ({ ...x, route: true })) : [step('goto', cur, target.id, { value: p.url, label: p.title, intent: `Go to ${p.title}`, route: true })]));
     }
     cur = target.id;
     curPage = p;

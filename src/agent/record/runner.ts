@@ -145,6 +145,7 @@ export async function recordShot(env: RunnerEnv, shot: Shot, attempt = 1): Promi
         else {
           const at = await performAction(ctx, env.map.controls[step.actionId], step.op, step.value);
           res.via = at.via; res.healed = at.healed; res.box = at.box;
+          if (step.op === 'search') res.label = step.value;   // the typed query is on screen too
         }
       } catch (err) {
         if (err instanceof ActionMissingError) { missing.push(err.actionId); throw new TakeFailed(id, err.message); }

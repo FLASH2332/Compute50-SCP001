@@ -54,10 +54,7 @@ export function buildStoryboard(goal: string, audience: string, targetSec: numbe
       });
     }
   }
-  // Group shots by chapter, keeping first-appearance order (intro stays first)
-  const chapters = [...new Set(shots.slice(1).map(s => s.chapter))];
-  const body = shots.slice(1).sort((a, b) => chapters.indexOf(a.chapter) - chapters.indexOf(b.chapter));
-  shots.splice(1, shots.length, ...body);
+  // Shots stay in plan order: the plan is the story (chapters follow it)
   shots.forEach((s, i) => { s.id = `shot${i + 1}`; });
   allocate(shots, flows, targetSec);
   const steps = new Map(flows.flatMap(f => f.steps).map(s => [s.id, s]));

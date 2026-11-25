@@ -12,6 +12,7 @@ dotenv.config();
 const USAGE = `Usage:
   npm run agent -- <url> "<goal>" [--audience "new admin"] [--seconds 60] [--yes] [--style fast|calm]
                    [--rebuild] [--no-db] [--graph <graph.json>] [--takes 3] [--pages 20] [--no-deepen] [--no-extras] [--headed]
+                   [--narration-style <guide.md>]   (default: src/agent/media/narration-style.md)
   npm run agent -- resume <runId>
   npm run agent -- edit <runId> "<request>"         e.g. "shorten the intro"
   npm run agent -- undo <runId>
@@ -51,6 +52,7 @@ async function main() {
   if (flags.help || !pos.length) { console.log(USAGE); return; }
   const style = flags.style ? String(flags.style) : undefined;
   if (style && style !== 'fast' && style !== 'calm') throw new Error('--style must be fast or calm');
+  if (flags['narration-style']) process.env.NARRATION_STYLE_FILE = String(flags['narration-style']);
   const store = flags['no-db'] ? undefined : new GraphDbStore();
   const agent = createDemoAgent({
     services: { ...servicesFromEnv(), store, approver: flags.yes ? new AutoApprover((style as 'fast' | 'calm') || 'calm') : new CliApprover(), hooks: sectionGraphHooks },

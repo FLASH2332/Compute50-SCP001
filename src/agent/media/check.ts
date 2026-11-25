@@ -3,7 +3,7 @@ import type { Take } from '../record/runner.js';
 import { norm } from '../nav/locate.js';
 import type { Timeline } from './timeline.js';
 
-export interface Finding { rule: 'silence' | 'voice_fits' | 'label_match' | 'passing_take'; shotId?: string; message: string }
+export interface Finding { rule: 'silence' | 'voice_fits' | 'label_match' | 'passing_take' | 'repetition'; shotId?: string; message: string }
 
 const SILENCE = 1.0;
 const FIT_TOLERANCE = 0.3;
@@ -39,6 +39,8 @@ export function checkTimeline(tl: Timeline, takes: Record<string, Take>, map: Ap
       out.push({ rule: 'voice_fits', shotId: s.shotId, message: `voice runs ${(s.voice.offset + s.voice.duration - s.outDuration).toFixed(1)}s past the end of the shot` });
   }
 
+  out.push(...checkRepetition(tl));
+
   const known = new Set<string>();
   for (const a of Object.values(map.controls)) for (const l of [a.label, ...(a.aliases || [])]) known.add(norm(l));
   for (const sec of Object.values(map.sections)) known.add(norm(sec.name));
@@ -57,5 +59,43 @@ export function checkTimeline(tl: Timeline, takes: Record<string, Take>, map: Ap
     const bad = s.stepIds.filter(id => !passed.has(id));
     if (bad.length) out.push({ rule: 'passing_take', shotId: s.shotId, message: `steps without a passing take: ${bad.join(', ')}` });
   }
+  return out;
+}
+
+const OPENERS = new Set(['here', "here's", 'heres', 'click', 'then', 'now', 'next', 'let', "let's", 'lets']);
+
+/**
+ * Repetition (narration quality): two lines in a row starting the same way,
+ * a stock opener ("Here's", "Click", "Then", "Now"...) used more than once,
+ * the same 4-word phrase in two lines, or a line that narrates more than two
+ * clicks. The later line is the one flagged (and rewritten).
+ */
+export function checkRepetition(tl: Timeline): Finding[] {
+  const out: Finding[] = [];
+  const lines = tl.shots.filter(s => s.voice?.line).map(s => ({ id: s.shotId, text: s.voice!.line }));
+  const tokens = (t: string) => t.toLowerCase().replace(/[“”"‘’]/g, '').replace(/[^a-z0-9' ]+/g, ' ').split(/\s+/).filter(Boolean);
+  const openerSeen = new Map<string, string>();
+  const grams = new Map<string, string>();
+  lines.forEach(({ id, text }, i) => {
+    const w = tokens(text);
+    const first = w[0] || '';
+    const prevFirst = i ? tokens(lines[i - 1].text)[0] : undefined;
+    const problems: string[] = [];
+    if (first && first === prevFirst) problems.push(`starts with "${first}" like the line before`);
+    else if (OPENERS.has(first) && openerSeen.has(first)) problems.push(`starts with "${first}" again (also ${openerSeen.get(first)})`);
+    if (OPENERS.has(first) && !openerSeen.has(first)) openerSeen.set(first, id);
+    const clicks = w.filter(x => x === 'click' || x === 'clicks').length;
+    if (clicks > 2) problems.push(`narrates ${clicks} clicks`);
+    const mine = new Set<string>();
+    for (let k = 0; k + 4 <= w.length; k++) {
+      const g = w.slice(k, k + 4).join(' ');
+      if (mine.has(g)) continue;
+      mine.add(g);
+      const other = grams.get(g);
+      if (other && other !== id) { problems.push(`repeats "${g}" from ${other}`); break; }
+    }
+    for (const g of mine) if (!grams.has(g)) grams.set(g, id);
+    if (problems.length) out.push({ rule: 'repetition', shotId: id, message: problems.join('; ') });
+  });
   return out;
 }

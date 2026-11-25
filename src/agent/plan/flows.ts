@@ -9,6 +9,7 @@ export interface FlowStep {
   label: string;
   value?: string;
   sectionId?: string;        // for show
+  route?: boolean;           // only gets us to a page (logo, menu link): not narrated as a click
   from: string;              // state the step starts in ('' = wherever the previous step left us)
   to: string;                // state it must land in ('' = a page found at record time)
   intent: string;

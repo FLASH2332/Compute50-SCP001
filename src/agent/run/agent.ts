@@ -82,7 +82,7 @@ export class Run {
     const shots = this.storyboard?.shots || [];
     shots.forEach((s, i) => {
       const st = s.stepIds.map(id => steps.get(id)!).filter(Boolean);
-      out.set(s.id, { intent: s.intent, title: s.title === 'Intro' ? s.chapter : s.title, steps: st, before: title(s.startState), after: title(st[st.length - 1]?.to || s.startState), audience: this.state.audience, isIntro: !s.flowId, isLast: i === shots.length - 1, targetSec: s.targetSec, site: this.map.app?.purpose });
+      out.set(s.id, { intent: s.intent, title: s.title === 'Intro' ? s.chapter : s.title, steps: st, before: title(s.startState), after: title(st[st.length - 1]?.to || s.startState), audience: this.state.audience, isIntro: !s.flowId, isLast: i === shots.length - 1, targetSec: s.targetSec, goal: this.state.goal, site: this.map.app?.purpose });
     });
     return out;
   }
@@ -274,8 +274,14 @@ export class DemoAgent {
           for (const sh of tl.shots) if (fixable.has(sh.shotId)) {
             const labelIssue = findings.some(f => f.shotId === sh.shotId && f.rule === 'label_match');
             const tooLong = findings.some(f => f.shotId === sh.shotId && f.rule === 'voice_fits');
+            const repeated = findings.filter(f => f.shotId === sh.shotId && (f.rule === 'repetition' || f.rule === 'label_match')).map(f => f.message);
+            // Rewrites see the current neighbouring lines, so they don't repeat them
+            const k = tl.shots.indexOf(sh);
+            const c = ctx.get(sh.shotId)!;
+            c.prevLine = tl.shots[k - 1]?.voice?.line;
+            c.nextLine = tl.shots[k + 1]?.voice?.line;
             // A label problem gets the deterministic line, which uses the exact on-screen labels
-            s.notes.push(...await voiceShot(sh, ctx.get(sh.shotId)!, preset, path.join(run.dir, 'voice'), run.dir, { speech: deps.speech, llm: labelIssue ? undefined : llm }, { direction: tooLong ? 'shorter' : undefined }));
+            s.notes.push(...await voiceShot(sh, c, preset, path.join(run.dir, 'voice'), run.dir, { speech: deps.speech, llm: labelIssue && !llm ? undefined : llm }, { direction: tooLong ? 'shorter' : undefined, request: repeated.length ? `Reword this line. Problems: ${repeated.join('; ')}. Only quote names exactly as on screen.` : undefined }));
           }
           layout(tl);
           findings = run.review(tl, skipped);

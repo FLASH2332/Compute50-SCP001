@@ -17,7 +17,8 @@ import { candidateFlows, findFlows } from '../src/agent/plan/flows.js';
 import { buildStoryboard } from '../src/agent/plan/storyboard.js';
 import { closeRunner, recordShot, type Take } from '../src/agent/record/runner.js';
 import { buildCues } from '../src/agent/media/captions.js';
-import { checkTimeline } from '../src/agent/media/check.js';
+import { checkRepetition, checkTimeline } from '../src/agent/media/check.js';
+import { fallbackLine } from '../src/agent/media/voice.js';
 import { probeDuration, renderTimeline } from '../src/agent/media/render.js';
 import { cutSegments, layout, PRESETS, zoomKeys, type Timeline } from '../src/agent/media/timeline.js';
 import { voiceTimeline } from '../src/agent/media/voice.js';
@@ -229,6 +230,23 @@ test('checks report silence, overlong voice, unknown labels and missing takes', 
   assert.ok(f.some(x => x.rule === 'label_match' && x.message.includes('Frobnicate')));
   assert.ok(!f.some(x => x.rule === 'label_match' && x.message.includes('Invite member')));
   assert.ok(f.some(x => x.rule === 'passing_take' && x.shotId === 'shot2'));
+});
+
+test('narration: repetition is flagged; route clicks are not narrated', () => {
+  const tl = tlWithVoices([
+    ["Here's the “Courses” section, full of guided learning paths.", 5, 3],
+    ["Here's the “Events” section with live webinars.", 5, 3],
+    ['Click “A”, click “B”, then click “C” to open the page.', 5, 3],
+    ['Full of guided learning paths for every level.', 5, 3]
+  ]);
+  const f = checkRepetition(tl);
+  assert.ok(f.some(x => x.shotId === 'shot2' && /starts with "here's"/.test(x.message)), JSON.stringify(f));
+  assert.ok(f.some(x => x.shotId === 'shot3' && /narrates 3 clicks/.test(x.message)));
+  assert.ok(f.some(x => x.shotId === 'shot4' && /repeats "full of guided learning"/.test(x.message)));
+  const line = fallbackLine({ intent: '', title: 'DSA', before: 'Home', after: 'DSA Tutorial - GeeksforGeeks', audience: '', isIntro: false, isLast: false,
+    steps: [{ id: 'a', op: 'click', actionId: 'x', label: 'geeksforgeeks', from: 'p', to: 'q', intent: 'Click “geeksforgeeks”', route: true },
+            { id: 'b', op: 'show', actionId: '', label: 'DSA Tutorial', from: 'q', to: 'q', intent: '', sectionId: 's' }] }, 30);
+  assert.ok(!/geeksforgeeks”/.test(line) && /DSA Tutorial/.test(line), line);
 });
 
 // ── Against the fixture app (section-graph crawler → adapter → agent) ──────

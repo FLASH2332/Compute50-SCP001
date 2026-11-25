@@ -156,6 +156,16 @@ function makeAgent(job: Job, approver: Approver, o: { headed?: boolean; storageS
 
 const relRun = (r: { mp4?: string; [k: string]: unknown }) => ({ ...r, mp4Url: r.mp4 ? mediaUrl(r.mp4) : undefined });
 
+/** The narration style guide for the next job (one job runs at a time); empty = the bundled guide. */
+const BASE_STYLE = process.env.NARRATION_STYLE_FILE;
+function setNarrationStyle(file: unknown): string | undefined {
+  const f = String(file || '').trim();
+  if (f && !fs.existsSync(f)) return `Narration style file not found: ${f}`;
+  if (f) process.env.NARRATION_STYLE_FILE = f;
+  else if (BASE_STYLE) process.env.NARRATION_STYLE_FILE = BASE_STYLE;
+  else delete process.env.NARRATION_STYLE_FILE;
+}
+
 const DEFAULT_DB = process.env.NEO4J_URI || 'bolt://localhost:7687';
 async function dbUp(uri = DEFAULT_DB): Promise<boolean> {
   const s = new GraphDbStore({ uri });
@@ -217,6 +227,8 @@ app.post('/api/runs', async (req, res) => {
   const takes = clampInt(b.takes, 1, 5, 1);
   const pages = clampInt(b.pages, 1, 200, 20);
   const graphFile = String(b.graphFile || '').trim();
+  const styleErr = setNarrationStyle(b.narrationStyle);
+  if (styleErr) return res.status(400).json({ error: styleErr });
   if (graphFile && !fs.existsSync(graphFile)) return res.status(400).json({ error: `Graph file not found: ${graphFile}` });
   const storeUri = b.store === 'graph' ? String(b.storeUri || '').trim() : '';
   if (b.store === 'graph' && !/^(bolt|neo4j)(\+s|\+ssc)?:\/\//.test(storeUri)) return res.status(400).json({ error: 'Give a bolt:// URI for the graph database.' });
@@ -389,6 +401,8 @@ app.post('/api/ask', (req, res) => {
   if (!question) return res.status(400).json({ error: 'Type a question.' });
   const { store, error } = storeFor(b);
   if (error) return res.status(400).json({ error });
+  const styleErr = setNarrationStyle(b.narrationStyle);
+  if (styleErr) return res.status(400).json({ error: styleErr });
   const job = startJob('ask', question, async job => {
     try {
       if (store) await store.check();

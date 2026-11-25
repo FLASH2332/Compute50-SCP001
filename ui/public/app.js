@@ -143,7 +143,7 @@ $('#askForm').addEventListener('submit', async e => {
   err.hidden = true;
   try {
     follow(await api('/api/ask', { url: $('#url').value.trim(), question: $('#question').value.trim(), from: $('#from').value.trim(), clip: $('#askClip').checked,
-      pages: Number($('#pages').value), headed: $('#headed').checked, ...storeBody() }));
+      pages: Number($('#pages').value), headed: $('#headed').checked, narrationStyle: $('#narrationStyle').value.trim(), ...storeBody() }));
   } catch (x) { err.textContent = x.message; err.hidden = false; }
 });
 async function loadQuestions() {
@@ -182,7 +182,7 @@ $('#compose').addEventListener('submit', async e => {
     style: ui.style === 'compare' ? undefined : ui.style, seconds: ui.seconds, review: $('#review').checked,
     takes: Number($('#takes').value), pages: Number($('#pages').value), deepen: $('#deepen').checked, extras: $('#extras').checked,
     headed: $('#headed').checked, rebuild: $('#rebuild').checked,
-    store: ui.store, storeUri: $('#storeUri').value.trim(), graphFile: $('#graphFile').value.trim(), storageState: $('#storageState').value.trim()
+    store: ui.store, storeUri: $('#storeUri').value.trim(), graphFile: $('#graphFile').value.trim(), storageState: $('#storageState').value.trim(), narrationStyle: $('#narrationStyle').value.trim()
   };
   try { follow(await api('/api/runs', body)); }
   catch (x) { err.textContent = x.message; err.hidden = false; }
