@@ -75,6 +75,7 @@ export interface Control {
   locators?: string[];       // from the graph builder: role=…|name=…, testid=…, css=…, text=…
   samples?: string[];        // list templates: texts of a few items
   count?: number;            // list templates: how many items
+  reliability?: number;      // what the graph builder saw when it tried this control ((s+1)/(n+2))
 }
 
 export interface UiState {
@@ -208,11 +209,13 @@ export class AppMap {
     return all.find(s => s.base && !s.seeded) || all.find(s => s.base) || all[0];
   }
 
-  addEdge(from: string, to: string, actionId: string, kind: EdgeKind, risk: Risk): ActionEdge {
+  /** Adds an edge once. A new edge can start from a known reliability (e.g. what the graph builder saw). */
+  addEdge(from: string, to: string, actionId: string, kind: EdgeKind, risk: Risk, reliability?: number): ActionEdge {
     const id = `${from}->${to}::${actionId || kind}`;
     const existing = this.data.edges[id];
     if (existing) return existing;
-    const e: ActionEdge = { id, from, to, actionId, kind, risk, n: 0, s: 0, fails: 0, reliability: 0.5, cost: 0, status: 'ok' };
+    const r = reliability !== undefined && reliability > 0 && reliability < 1 ? reliability : 0.5;
+    const e: ActionEdge = { id, from, to, actionId, kind, risk, n: 0, s: 0, fails: 0, reliability: r, cost: 0, status: 'ok' };
     e.cost = costOf(e);
     this.data.edges[id] = e;
     return e;
@@ -287,4 +290,10 @@ export class AppMap {
 
 function costOf(e: ActionEdge): number {
   return 1 + 2 * -Math.log(e.reliability) + RISK_COST[e.risk];
+}
+
+const RISK_ORDER: Risk[] = ['safe', 'mutating', 'destructive'];
+/** The stricter of two risk classes. */
+export function stricter(a: Risk | undefined, b: Risk | undefined): Risk {
+  return RISK_ORDER[Math.max(RISK_ORDER.indexOf(a ?? 'safe'), RISK_ORDER.indexOf(b ?? 'safe'))];
 }

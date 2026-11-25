@@ -27,6 +27,8 @@ import { createDemoAgent } from '../src/agent/index.js';
 import { planDemo } from '../src/agent/plan/planner.js';
 import { GraphDbStore } from '../src/agent/adapters/graphDbStore.js';
 import { serveDir } from '../src/agent/util/staticServer.js';
+import { ensureMap } from '../src/agent/core/mapProvider.js';
+import { createOnboardingAgent } from '../src/agent/onboard/agent.js';
 
 const quiet = () => {};
 
@@ -66,6 +68,33 @@ test('URL templates turn ids into placeholders', () => {
   assert.equal(urlTemplate('https://a.test/invoice/123?x=1'), 'a.test/invoice/{id}');
   assert.equal(urlTemplate('https://a.test/u/3f2b9c1e-1111-4a4a-9b9b-0123456789ab/edit'), 'a.test/u/{id}/edit');
   assert.equal(urlTemplate('http://127.0.0.1:5050/index.html'), '127.0.0.1:5050/');
+});
+
+test('adapter reads the graph builder\'s fields: ranks, areas, profile, locators, stricter risk, reliability', () => {
+  const page = (id: string, extra: Record<string, unknown> = {}) => ({ id, url: id, title: id.split('/').pop() || 'Home', depth: 0, crawled: true, status: 'ok', discoveredAt: '', ...extra });
+  const model: any = {
+    startUrl: 'https://app.test/', domain: 'app.test',
+    pages: { 'https://app.test/': page('https://app.test/', { pagerank: 0.6, betweenness: 0.2 }), 'https://app.test/team': page('https://app.test/team', { pagerank: 0.4 }) },
+    sections: { s1: { id: 's1', pageId: 'https://app.test/', name: 'Main', role: 'main', order: 0, hidden: false, actionCount: 2, totalActions: 2, summary: '' } },
+    actions: {
+      a1: { id: 'a1', sectionId: 's1', label: 'Team', type: 'link', selector: 'a[href="/team"]', href: 'https://app.test/team', navigatesTo: 'https://app.test/team', visible: true,
+            risk: 'navigate', locators: ['role=link|name=Team', 'css=nav > a:nth-child(2)'], reliability: 0.9 },
+      a2: { id: 'a2', sectionId: 's1', label: 'Go', type: 'button', selector: '#go', visible: true, risk: 'submit_mutating' }
+    },
+    extraNodes: [
+      { label: 'App', id: 'app', props: { purpose: 'Team chat', size: 'small', flows: ['invite someone'] } },
+      { label: 'Area', id: 'area_x', props: { name: 'People', medoid: 'https://app.test/team' } }
+    ],
+    extraEdges: [{ type: 'CONTAINS', from: { label: 'Area', id: 'area_x' }, to: { label: 'Page', id: 'https://app.test/team' } }]
+  };
+  const map = appMapFromSectionGraph(model);
+  assert.equal(map.pages['https://app.test/'].rank, 0.6);
+  assert.deepEqual(map.app, { purpose: 'Team chat', size: 'small', flows: ['invite someone'] });
+  assert.deepEqual(map.areas.area_x.pageIds, ['https://app.test/team']);
+  assert.equal(map.pages['https://app.test/team'].areaId, 'area_x');
+  assert.deepEqual(map.controls.a1.locators, ['role=link|name=Team', 'css=nav > a:nth-child(2)']);
+  assert.equal(map.controls.a1.risk, 'safe');
+  assert.equal(map.controls.a2.risk, 'mutating', '"Go" looks safe by label, but the builder saw it change data');
 });
 
 test('site modes: allow-listed hosts are full, everything else is public', () => {
@@ -388,6 +417,27 @@ describe('fixture app', () => {
       assert.deepEqual(Object.values((await store.find(copy.startUrl))!.areas).map(a => a.name), ['Everything']);
       await store.forget(map.startUrl);
     } finally { await store.close(); }
+  });
+
+  test('one graph, two agents: the map is built once, then both agents read the saved one', async () => {
+    const saved = new Map<string, string>();
+    const store = {
+      name: 'memory', saves: 0,
+      async find(url: string) { const j = saved.get(new URL(url).origin); return j ? new AppMap(JSON.parse(j)) : null; },
+      async save(m: AppMap) { this.saves++; saved.set(new URL(m.startUrl).origin, JSON.stringify(m.data)); }
+    };
+    let builds = 0;
+    const source = async () => { builds++; return new AppMap(JSON.parse(JSON.stringify(map.data))); };
+    const env = { store, log: quiet };
+    const first = await ensureMap({ url: map.startUrl, map: source, deepen: false }, env);
+    assert.equal(first.from, 'built');
+    const again = await ensureMap({ url: map.startUrl, map: source }, env);
+    assert.equal(again.from, 'store');
+    const onboarding = createOnboardingAgent({ services: { store, log: quiet } });
+    const viaOnboarding = await onboarding.getMap({ url: map.startUrl, map: source, question: '' });
+    assert.equal(builds, 1, 'built once');
+    assert.equal(store.saves, 1);
+    assert.deepEqual(Object.keys(viaOnboarding.pages).sort(), Object.keys(first.map.pages).sort());
   });
 
   test('plug and play: the agent runs from a plain AppMap with no graph engine involved', async () => {

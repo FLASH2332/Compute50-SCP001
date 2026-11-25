@@ -14,7 +14,7 @@ import { SectionCrawler, pageIdOf } from '../../sections/sectionCrawler.js';
 import { SectionGraph } from '../../sections/sectionGraph.js';
 import { dismissCookieBanner, preventFormSubmission } from '../../sections/interactions.js';
 import type { SectionGraphModel } from '../../sections/types.js';
-import { AppMap, stateIdOf, urlTemplate, type Control, type ControlType, type UiState } from '../core/appMap.js';
+import { AppMap, stateIdOf, stricter, urlTemplate, type Control, type ControlType, type Risk, type UiState } from '../core/appMap.js';
 import type { BrowserHooks, MapSource } from '../core/ports.js';
 import { similarity } from '../nav/locate.js';
 import { riskOf } from '../nav/risk.js';
@@ -25,7 +25,8 @@ export function appMapFromSectionGraph(model: SectionGraphModel): AppMap {
 
   for (const p of Object.values(model.pages)) {
     if (!p.crawled || p.status !== 'ok' || p.redirectedTo) continue;
-    map.pages[p.id] = { id: p.id, url: p.url, title: p.title, template: urlTemplate(p.url) };
+    map.pages[p.id] = { id: p.id, url: p.url, title: p.title, template: urlTemplate(p.url),
+      rank: p.pagerank, betweenness: p.betweenness, reachable: p.reachable, deadEnd: p.deadEnd };
   }
   for (const sec of Object.values(model.sections)) {
     if (!map.pages[sec.pageId]) continue;
@@ -38,9 +39,11 @@ export function appMapFromSectionGraph(model: SectionGraphModel): AppMap {
     const c: Control = {
       id: a.id, pageId: sec.pageId, label: a.label, type: a.type as ControlType, inputType: a.inputType, selector: a.selector,
       href: a.href, navigatesTo: target && map.pages[target] ? target : undefined, visible: a.visible,
-      section: { id: sec.id, name: sec.name, role: sec.role, hidden: sec.hidden }
+      section: { id: sec.id, name: sec.name, role: sec.role, hidden: sec.hidden },
+      locators: a.locators?.length ? a.locators : undefined, samples: a.samples?.length ? a.samples : undefined, count: a.count, reliability: a.reliability
     };
-    c.risk = riskOf(c, sec.role);
+    // Our label rules, made stricter (never looser) by the graph builder's own risk class
+    c.risk = stricter(riskOf(c, sec.role), BUILDER_RISK[a.risk ?? 'read']);
     map.controls[c.id] = c;
   }
 
@@ -62,13 +65,38 @@ export function appMapFromSectionGraph(model: SectionGraphModel): AppMap {
       const close = own.filter(c => c.section && similarity(c.section.name, name) >= 0.5);
       const d = map.addState({ id: stateIdOf(from.template, name, ''), template: from.template, pageId: from.pageId, url: from.url, title: from.title, dialog: name, tab: '',
         visibleActions: [...from.visibleActions, ...(close.length ? close : own).map(c => c.id)], seeded: true });
-      map.addEdge(from.id, d.id, control.id, 'click', control.risk || 'safe');
+      map.addEdge(from.id, d.id, control.id, 'click', control.risk || 'safe', control.reliability);
     } else if (it.kind === 'navigate' && it.resultUrl) {
       const to = base.get(resolve(pageIdOf(it.resultUrl)));
-      if (to) map.addEdge(from.id, to.id, control.id, 'click', control.risk || 'safe');
+      if (to) map.addEdge(from.id, to.id, control.id, 'click', control.risk || 'safe', control.reliability);
     }
   }
+  readExtras(model, map, resolve);
   return map;
+}
+
+/** The graph builder's risk classes, in the agent's three (external links are never followed anyway). */
+const BUILDER_RISK: Record<string, Risk> = { read: 'safe', navigate: 'safe', input: 'safe', submit_safe: 'safe', external: 'safe', submit_mutating: 'mutating', destructive: 'destructive' };
+
+/** Areas (named communities of pages) and the site profile from the graph builder (extraNodes / extraEdges). */
+function readExtras(model: SectionGraphModel, map: AppMap, resolve: (id: string) => string) {
+  for (const n of model.extraNodes ?? []) {
+    if (n.label === 'Area') {
+      const pr = n.props as { name?: string; summary?: string; medoid?: string };
+      map.areas[n.id] = { id: n.id, name: pr.name || n.id, summary: pr.summary, medoid: pr.medoid ? resolve(pr.medoid) : undefined, pageIds: [] };
+    } else if (n.label === 'App') {
+      const pr = n.props as { purpose?: string; size?: string; flows?: unknown };
+      map.data.app = { purpose: pr.purpose, size: pr.size, flows: Array.isArray(pr.flows) ? pr.flows.map(String) : undefined };
+    }
+  }
+  for (const e of model.extraEdges ?? []) {
+    if (e.type !== 'CONTAINS' || e.from.label !== 'Area' || e.to.label !== 'Page') continue;
+    const area = map.areas[e.from.id];
+    const page = map.pages[resolve(e.to.id)];
+    if (!area || !page) continue;
+    area.pageIds.push(page.id);
+    page.areaId ??= area.id;
+  }
 }
 
 /** A graph saved by the studio (.demo-runs/<id>/graph.json) or by SectionGraph.getModel(). */

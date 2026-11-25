@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { AppMap, urlTemplate } from '../core/appMap.js';
 import type { MapSource, Services } from '../core/ports.js';
-import { exploreInteractions, classifyRisk, linkEdges } from '../explore/interact.js';
+import { ensureMap } from '../core/mapProvider.js';
 import { checkTimeline, type Finding } from '../media/check.js';
 import { renderTimeline } from '../media/render.js';
 import { cutSegments, layout, PRESETS, saveTimeline, zoomKeys, type Preset, type Timeline, type TimelineShot } from '../media/timeline.js';
@@ -187,38 +187,9 @@ export class DemoAgent {
     return this.continue(run);
   }
 
-  /**
-   * The map for this run: a given AppMap; else the store's saved map for the
-   * site; else build one from the source, deepen it, save it to the store and
-   * read it back (the store is the source of truth).
-   */
+  /** The map for this run, from the shared map provider (given → saved in the store → built). */
   private async getMap(input: MakeInput): Promise<AppMap> {
-    if (input.map instanceof AppMap) return this.prepare(input.map, input.deepen);
-    const store = this.services.store;
-    const url = input.url || '';
-    if (store && url && !input.rebuild) {
-      const saved = await store.find(url);
-      if (saved) {
-        this.log(`Using the saved map of ${new URL(url).origin} from ${store.name}: ${Object.keys(saved.pages).length} pages, ${Object.keys(saved.states).length} UI states`);
-        return saved;
-      }
-      this.log(`No saved map for ${new URL(url).origin} in ${store.name}; building one`);
-    }
-    if (!input.map) throw new Error('No map: give a map source, or a store that has this site.');
-    const built = await this.prepare(await input.map(this.log), input.deepen);
-    if (!store) return built;
-    await store.save(built);
-    this.log(`Saved the map to ${store.name}`);
-    return (await store.find(built.startUrl)) || built;
-  }
-
-  private async prepare(map: AppMap, deepen = true): Promise<AppMap> {
-    if (!Object.keys(map.pages).length) throw new Error('The map has no pages (the site could not be crawled).');
-    classifyRisk(map);
-    if (deepen) {
-      const r = await exploreInteractions(map, { browserChannel: this.cfg.browserChannel, storageState: this.cfg.storageState, hooks: this.services.hooks, log: this.log });
-      this.log(`Map: ${Object.keys(map.pages).length} pages, ${r.states} UI states, ${r.edges} actions between them (source: ${map.data.source})`);
-    } else linkEdges(map);
+    const { map } = await ensureMap(input, { store: this.services.store, hooks: this.services.hooks, log: this.log, browserChannel: this.cfg.browserChannel, storageState: this.cfg.storageState }, true);
     return map;
   }
 

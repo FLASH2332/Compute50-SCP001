@@ -79,7 +79,8 @@ export async function locateAction(page: Page, action: Control, changes: ChangeL
   const tier1: { key: string; make: () => Locator }[] = [
     { key: 'css', make: () => page.locator(action.selector) },
     ...names.map((n, i) => ({ key: i ? `role:alias${i}` : 'role', make: () => page.getByRole(role, { name: n, exact: true }) })),
-    { key: isField ? 'label' : 'text', make: () => isField ? page.getByLabel(action.label, { exact: true }) : page.getByText(action.label, { exact: true }) }
+    { key: isField ? 'label' : 'text', make: () => isField ? page.getByLabel(action.label, { exact: true }) : page.getByText(action.label, { exact: true }) },
+    ...builderLocators(page, action.locators)
   ];
   const hits = action.hits || (action.hits = {});
   tier1.sort((a, b) => (hits[b.key] || 0) - (hits[a.key] || 0));
@@ -159,4 +160,20 @@ function rename(action: Control, newLabel: string, changes: ChangeLog, via: stri
   action.aliases = [...new Set([...(action.aliases || []), action.label])];
   changes.add({ kind: 'rename', actionId: action.id, from: action.label, to: newLabel, via });
   action.label = newLabel;
+}
+
+/**
+ * The graph builder's stored locators (new_graph_base): `role=<r>|name=<n>`, `testid=<id>`, `css=<path>`,
+ * `text=<name>`. `item=` (one item of a list) needs a chosen item, so it is skipped here.
+ */
+export function builderLocators(page: Page, locators: string[] | undefined): { key: string; make: () => Locator }[] {
+  const out: { key: string; make: () => Locator }[] = [];
+  for (const raw of locators ?? []) {
+    const role = raw.match(/^role=([^|]+)\|name=(.*)$/);
+    if (role) out.push({ key: `b:${raw}`, make: () => page.getByRole(role[1] as any, { name: role[2], exact: true }) });
+    else if (raw.startsWith('testid=')) out.push({ key: `b:${raw}`, make: () => page.getByTestId(raw.slice(7)) });
+    else if (raw.startsWith('css=')) out.push({ key: `b:${raw}`, make: () => page.locator(raw.slice(4)) });
+    else if (raw.startsWith('text=')) out.push({ key: `b:${raw}`, make: () => page.getByText(raw.slice(5), { exact: true }) });
+  }
+  return out;
 }

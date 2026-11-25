@@ -1,5 +1,5 @@
 import { chromium } from 'playwright';
-import type { AppMap, Control, UiState } from '../core/appMap.js';
+import { stricter, type AppMap, type Control, type UiState } from '../core/appMap.js';
 import type { BrowserHooks, Logger } from '../core/ports.js';
 import { describeLocator, norm } from '../nav/locate.js';
 import { readUi, stateIdFor, type UiReading } from '../nav/locateState.js';
@@ -19,7 +19,8 @@ export interface ExploreOptions {
 
 /** Gives every control its risk class. */
 export function classifyRisk(map: AppMap): void {
-  for (const c of Object.values(map.controls)) c.risk = riskOf(c, c.section?.role);
+  // Never lower a risk the graph source set (e.g. the builder saw a submit that changes data)
+  for (const c of Object.values(map.controls)) c.risk = stricter(riskOf(c, c.section?.role), c.risk);
 }
 
 /**
@@ -160,7 +161,7 @@ export function linkEdges(map: AppMap): void {
       const target = map.pages[a.navigatesTo];
       if (!target) continue;
       const t = map.baseStateOf(target.template);
-      if (t && t.id !== s.id) map.addEdge(s.id, t.id, a.id, 'link', 'safe');
+      if (t && t.id !== s.id) map.addEdge(s.id, t.id, a.id, 'link', 'safe', a.reliability);
     }
   }
 }

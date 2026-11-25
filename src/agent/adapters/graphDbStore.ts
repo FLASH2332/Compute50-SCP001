@@ -82,7 +82,7 @@ export class GraphDbStore implements MapStore {
         navigatesTo: target && pages[target] ? target : undefined, visible: a.visible !== false,
         section: { id: s.id, name: s.name || '', role: s.role || 'content', hidden: !!s.hidden },
         risk: a.risk || undefined, aliases: a.aliases || undefined, hits: parse(a.hits), status: a.status || undefined, box: parse(a.box),
-        locators: a.locators?.length ? a.locators : undefined, samples: a.samples?.length ? a.samples : undefined, count: num(a.count)
+        locators: a.locators?.length ? a.locators : undefined, samples: a.samples?.length ? a.samples : undefined, count: num(a.count), reliability: num(a.reliability)
       };
     }
     const states: Record<string, UiState> = {};
@@ -133,11 +133,11 @@ export class GraphDbStore implements MapStore {
     await this.run(`UNWIND $controls AS c MATCH (s:Section {id: c.sectionId}) MERGE (a:Action {id: c.id})
       SET a.label = c.label, a.type = c.type, a.inputType = c.inputType, a.selector = c.selector, a.href = c.href, a.visible = c.visible,
           a.risk = c.risk, a.aliases = c.aliases, a.hits = c.hits, a.status = c.status, a.box = c.box,
-          a.locators = c.locators, a.samples = c.samples, a.count = c.count
+          a.locators = c.locators, a.samples = c.samples, a.count = c.count, a.reliability = c.reliability
       MERGE (s)-[:HAS_ACTION]->(a)`, {
       controls: Object.values(d.controls).map(c => ({ id: c.id, sectionId: sectionOf(c), label: c.label, type: c.type, inputType: c.inputType ?? null, selector: c.selector, href: c.href ?? null,
         visible: c.visible, risk: c.risk ?? null, aliases: c.aliases ?? [], hits: json(c.hits), status: c.status ?? 'ok', box: json(c.box),
-        locators: c.locators ?? [], samples: c.samples ?? [], count: c.count ?? null }))
+        locators: c.locators ?? [], samples: c.samples ?? [], count: c.count ?? null, reliability: c.reliability ?? null }))
     });
     await this.run('UNWIND $links AS l MATCH (a:Action {id: l.id}), (t:Page {url: l.to}) MERGE (a)-[:NAVIGATES_TO]->(t)',
       { links: Object.values(d.controls).filter(c => c.navigatesTo).map(c => ({ id: c.id, to: c.navigatesTo })) });

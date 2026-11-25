@@ -11,7 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { AppMap } from '../core/appMap.js';
 import type { MapSource, Services } from '../core/ports.js';
-import { classifyRisk, exploreInteractions, linkEdges } from '../explore/interact.js';
+import { ensureMap } from '../core/mapProvider.js';
 import { SilentSpeech } from '../providers/speech.js';
 import { AutoApprover } from '../providers/approvers.js';
 import { answerSteps, flowFromRoute } from './answer.js';
@@ -57,27 +57,9 @@ export class OnboardingAgent {
     this.runsDir = cfg.runsDir || 'runs';
   }
 
-  /** Same rule as the demo agent: given map; else the store's map; else build, save, read back. */
+  /** The map, from the shared map provider (same graph as the demo agent). Not deepened by default: answers are quick. */
   async getMap(input: AskInput): Promise<AppMap> {
-    const log = this.services.log;
-    if (input.map instanceof AppMap) return this.prepare(input.map, false);
-    const store = this.services.store;
-    if (store && input.url && !input.rebuild) {
-      const saved = await store.find(input.url);
-      if (saved) { log(`Using the saved map of ${new URL(input.url).origin} from ${store.name}`); return this.prepare(saved, false); }
-    }
-    if (!input.map) throw new Error('No map: give a graph file, a map source, or a store that has this site.');
-    const built = await this.prepare(await input.map(log), input.deepen ?? false);
-    if (!store) return built;
-    await store.save(built);
-    return (await store.find(built.startUrl)) || built;
-  }
-
-  private async prepare(map: AppMap, deepen: boolean): Promise<AppMap> {
-    if (!Object.keys(map.pages).length) throw new Error('The map has no pages.');
-    classifyRisk(map);
-    if (deepen) await exploreInteractions(map, { browserChannel: this.cfg.browserChannel, storageState: this.cfg.storageState, hooks: this.services.hooks, log: this.services.log });
-    else linkEdges(map);
+    const { map } = await ensureMap(input, { store: this.services.store, hooks: this.services.hooks, log: this.services.log, browserChannel: this.cfg.browserChannel, storageState: this.cfg.storageState }, false);
     return map;
   }
 

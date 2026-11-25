@@ -13,6 +13,7 @@
     "agent": "tsx src/agent/cli.ts",
     "fixture": "tsx src/agent/util/staticServer.ts test-site 5050",
     "onboard": "tsx src/agent/onboard/cli.ts",
+    "graph": "tsx src/agent/graphCli.ts",
     "bench:agent": "tsx bench/agent/cli.ts",
     "bench:crawl": "tsx bench/crawl.ts",
     "bench:mcp": "tsx bench/mcp/server.ts",
