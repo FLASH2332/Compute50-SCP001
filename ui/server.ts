@@ -1,5 +1,6 @@
 /**
- * Demo Agent UI — a small web front end for src/agent/.
+ * Demo Agent UI — a small web front end for src/agent/: one site graph (Memgraph), two agents
+ * (make a demo, ask a question).
  *
  *   npx tsx ui/server.ts            → http://localhost:4300
  *
@@ -16,7 +17,8 @@ import dotenv from 'dotenv';
 import express, { type Response } from 'express';
 import { appMapFromGraphFile, crawlSource, sectionGraphHooks } from '../src/agent/adapters/sectionGraph.js';
 import { GraphDbStore } from '../src/agent/adapters/graphDbStore.js';
-import { AutoApprover, createDemoAgent, editDemo, listVersions, servicesFromEnv, undoDemo, type Approver, type DemoAgent } from '../src/agent/index.js';
+import { AutoApprover, createDemoAgent, createOnboardingAgent, editDemo, listVersions, servicesFromEnv, undoDemo, type Approver, type DemoAgent } from '../src/agent/index.js';
+import { ensureMap } from '../src/agent/core/mapProvider.js';
 import { PRESETS } from '../src/agent/media/timeline.js';
 import { allowedHosts, modeFor } from '../src/agent/nav/risk.js';
 
@@ -52,7 +54,7 @@ type Pending =
 
 interface Job {
   id: string;
-  kind: 'make' | 'resume' | 'edit' | 'undo';
+  kind: 'make' | 'resume' | 'edit' | 'undo' | 'graph' | 'ask';
   label: string;
   runId?: string;
   status: 'running' | 'waiting' | 'done' | 'error';
@@ -128,11 +130,12 @@ function watchPhase(job: Job, before: Set<string>) {
 }
 
 function startJob(kind: Job['kind'], label: string, body: (job: Job) => Promise<unknown>, runId?: string): Job {
+  const watch = kind !== 'graph' && kind !== 'ask';   // graph builds and answers make no demo run folder
   const job: Job = { id: Math.random().toString(36).slice(2, 10), kind, label, runId, status: 'running', phase: kind === 'make' ? 'map' : kind, logs: [], startedAt: Date.now(), clients: new Set() };
   jobs.set(job.id, job);
   active = job;
   const before = new Set(fs.readdirSync(RUNS_DIR));
-  const stop = watchPhase(job, before);
+  const stop = watch ? watchPhase(job, before) : () => {};
   body(job).then(
     result => { stop(); update(job, { status: 'done', phase: 'done', result, pending: undefined }); },
     err => { stop(); const m = err instanceof Error ? err.message : String(err); log(job, `Error: ${m}`); update(job, { status: 'error', error: m, pending: undefined }); }
@@ -152,6 +155,19 @@ function makeAgent(job: Job, approver: Approver, o: { headed?: boolean; storageS
 }
 
 const relRun = (r: { mp4?: string; [k: string]: unknown }) => ({ ...r, mp4Url: r.mp4 ? mediaUrl(r.mp4) : undefined });
+
+const DEFAULT_DB = process.env.NEO4J_URI || 'bolt://localhost:7687';
+async function dbUp(uri = DEFAULT_DB): Promise<boolean> {
+  const s = new GraphDbStore({ uri });
+  try { await s.check(); return true; } catch { return false; } finally { await s.close(); }
+}
+/** The store a request asks for: its bolt:// URI, or none for an in-memory map. */
+function storeFor(b: { store?: string; storeUri?: string }): { store?: GraphDbStore; error?: string } {
+  if (b.store !== 'graph') return {};
+  const uri = String(b.storeUri || DEFAULT_DB).trim();
+  if (!/^(bolt|neo4j)(\+s|\+ssc)?:\/\//.test(uri)) return { error: 'Give a bolt:// URI for the graph database.' };
+  return { store: new GraphDbStore({ uri }) };
+}
 
 // ── HTTP ─────────────────────────────────────────────────────────────────────
 const app = express();
@@ -176,7 +192,9 @@ app.get('/api/options', async (_req, res) => {
       voice: process.env.ELEVENLABS_API_KEY ? 'elevenlabs' : 'silent',
       ffmpeg,
       allowHosts: allowedHosts(),
-      resetUrl: !!process.env.DEMO_RESET_URL
+      resetUrl: !!process.env.DEMO_RESET_URL,
+      graphDb: { uri: DEFAULT_DB, up: await dbUp() },
+      graphLlm: !!process.env.LLM_BASE_URL
     },
     active: active ? snapshot(active) : null
   });
@@ -317,6 +335,77 @@ app.get('/api/runs/:runId', (req, res) => {
   const mp4 = path.join(outDir, 'demo.mp4');
   res.json({ runId, url, state: { goal: state.goal, audience: state.audience, seconds: state.seconds, phase: state.phase, style: state.style, version: state.version, findings: state.findings, notes: state.notes, options: state.options },
     storyboard, takes, outputs, versions, video: fs.existsSync(mp4) ? mediaUrl(mp4) + `?v=${state.version}-${fs.statSync(mp4).mtimeMs}` : null });
+});
+
+// ── One site graph ───────────────────────────────────────────────────────────
+
+/** What the database knows about a site: pages, areas, UI states, the profile. */
+app.get('/api/graph', async (req, res) => {
+  const url = String(req.query.url || '');
+  try { new URL(url); } catch { return res.status(400).json({ error: 'Enter a full http(s) URL.' }); }
+  const { store, error } = storeFor({ store: 'graph', storeUri: String(req.query.storeUri || '') });
+  if (!store) return res.status(400).json({ error });
+  try {
+    const map = await store.find(url);
+    if (!map) return res.json({ exists: false, store: store.name });
+    const pages = Object.values(map.pages);
+    const top = pages.filter(p => p.rank !== undefined).sort((a, b) => (b.rank ?? 0) - (a.rank ?? 0)).slice(0, 5).map(p => p.title.split(/\s+[|\-–·]\s+/)[0]);
+    res.json({ exists: true, store: store.name, purpose: map.app?.purpose, pages: pages.length, controls: Object.keys(map.controls).length,
+      states: Object.keys(map.states).length, edges: Object.keys(map.edges).length,
+      areas: Object.values(map.areas).map(a => ({ name: a.name, pages: a.pageIds.length })), top });
+  } catch (e) {
+    res.status(503).json({ error: e instanceof Error ? e.message : String(e) });
+  } finally { await store.close(); }
+});
+
+/** Build (or rebuild) the site's graph into the database: ensureMap() with the crawler. Both agents then reuse it. */
+app.post('/api/graph', (req, res) => {
+  if (active) return busy(res);
+  const b = req.body || {};
+  const url = String(b.url || '').trim();
+  try { if (!/^https?:$/.test(new URL(url).protocol)) throw 0; } catch { return res.status(400).json({ error: 'Enter a full http(s) URL.' }); }
+  const { store, error } = storeFor({ store: 'graph', storeUri: b.storeUri });
+  if (!store) return res.status(400).json({ error });
+  const job = startJob('graph', `graph for ${new URL(url).host}`, async job => {
+    try {
+      await store.check();
+      const { map, from } = await ensureMap({ url, map: crawlSource(url, { maxPages: clampInt(b.pages, 1, 200, 20), browserChannel: process.env.CRAWLER_BROWSER_CHANNEL }), rebuild: b.rebuild !== false, deepen: b.deepen !== false },
+        { store, hooks: sectionGraphHooks, log: m => log(job, m), browserChannel: process.env.CRAWLER_BROWSER_CHANNEL }, true);
+      return { from, pages: Object.keys(map.pages).length, areas: Object.keys(map.areas).length, states: Object.keys(map.states).length };
+    } finally { await store.close(); }
+  });
+  res.json(snapshot(job));
+});
+
+// ── Ask (onboarding agent) ───────────────────────────────────────────────────
+
+/** Answer a question about the site: steps, plus a short clip of the way there. */
+app.post('/api/ask', (req, res) => {
+  if (active) return busy(res);
+  const b = req.body || {};
+  const url = String(b.url || '').trim();
+  const question = String(b.question || '').trim();
+  try { if (!/^https?:$/.test(new URL(url).protocol)) throw 0; } catch { return res.status(400).json({ error: 'Enter a full http(s) URL.' }); }
+  if (!question) return res.status(400).json({ error: 'Type a question.' });
+  const { store, error } = storeFor(b);
+  if (error) return res.status(400).json({ error });
+  const job = startJob('ask', question, async job => {
+    try {
+      if (store) await store.check();
+      const agent = createOnboardingAgent({ services: { ...servicesFromEnv(), store, hooks: sectionGraphHooks, log: m => log(job, m) }, runsDir: RUNS_DIR, headless: !b.headed, browserChannel: process.env.CRAWLER_BROWSER_CHANNEL });
+      const r = await agent.ask({ url, question, from: String(b.from || '').trim() || undefined, clip: b.clip !== false,
+        map: crawlSource(url, { maxPages: clampInt(b.pages, 1, 200, 20), browserChannel: process.env.CRAWLER_BROWSER_CHANNEL }) });
+      return { ...r, clipUrl: r.clip ? mediaUrl(r.clip.file) : undefined };
+    } finally { await store?.close(); }
+  });
+  res.json(snapshot(job));
+});
+
+/** The demand list: questions people asked, newest first, with whether they were answered. */
+app.get('/api/questions', (_req, res) => {
+  const f = path.join(RUNS_DIR, 'questions.jsonl');
+  const lines = fs.existsSync(f) ? fs.readFileSync(f, 'utf8').trim().split('\n').filter(Boolean) : [];
+  res.json(lines.slice(-100).reverse().map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean));
 });
 
 app.get('/api/active', (_req, res) => res.json(active ? snapshot(active) : null));

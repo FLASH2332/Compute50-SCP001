@@ -36,7 +36,8 @@ const STYLE_TEXT = {
   compare: 'Record the opening, render both, then pick'
 };
 
-const ui = { style: 'calm', seconds: 60, store: 'none', ffmpeg: true, job: null, es: null, viewing: null };
+const ui = { style: 'calm', seconds: 60, store: 'none', ffmpeg: true, job: null, es: null, viewing: null, tab: 'demo', graphDb: null };
+const ASK_EXAMPLES = ['what can I do here?', 'where should I start?', 'how do I invite a teammate?', 'how do I create an invoice?'];
 
 // ── Options / environment ────────────────────────────────────────────────────
 async function loadOptions() {
@@ -55,6 +56,9 @@ async function loadOptions() {
     b.hidden = false;
     b.textContent = 'FFmpeg was not found on this machine. Mapping, planning and screen recording work, and you can watch the recorded takes, but the final MP4 cannot be rendered. Install FFmpeg (or set FFMPEG_PATH in .env), restart the UI, then press "Continue" on the run.';
   }
+  ui.graphDb = o.env.graphDb;
+  if (o.env.graphDb?.up) setStore('graph', o.env.graphDb.uri);
+  envChipsGraph(o.env.graphDb);
   buildStyles(o.styles);
   if (o.active) follow(o.active);
 }
@@ -76,8 +80,8 @@ function buildLengths() {
 }
 
 $('#examples').append(...EXAMPLES.map(e => h('button', { type: 'button', onclick: () => { $('#goal').value = e; } }, e)));
-$('#useFixture').addEventListener('click', e => { e.preventDefault(); $('#url').value = FIXTURE; checkMode(); });
-$('#url').addEventListener('change', checkMode);
+$('#useFixture').addEventListener('click', e => { e.preventDefault(); $('#url').value = FIXTURE; checkMode(); loadGraph(); });
+$('#url').addEventListener('change', () => { checkMode(); loadGraph(); });
 async function checkMode() {
   const badge = $('#modeBadge');
   const url = $('#url').value.trim();
@@ -86,13 +90,87 @@ async function checkMode() {
   badge.hidden = !mode;
   if (mode) { badge.className = 'mode ' + mode; badge.textContent = mode + ' mode'; }
 }
-$('#storeSeg').addEventListener('click', e => {
-  const v = e.target.dataset?.v;
-  if (!v) return;
+function setStore(v, uri) {
   ui.store = v;
   $('#storeSeg').querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.v === v));
   $('#storeUri').hidden = v !== 'graph';
+  if (uri && !$('#storeUri').value) $('#storeUri').value = uri;
+  loadGraph();
+}
+$('#storeSeg').addEventListener('click', e => { const v = e.target.dataset?.v; if (v) setStore(v); });
+$('#storeUri').addEventListener('change', loadGraph);
+function envChipsGraph(db) {
+  if (!db) return;
+  $('#envChips').append(h('span', { class: 'chip ' + (db.up ? 'ok' : 'warn'), title: db.up ? `Site graphs are kept in ${db.uri}` : `No graph database on ${db.uri}: maps are built per run` }, db.up ? 'Graph: Memgraph' : 'Graph: in memory'));
+}
+
+// ── One site graph (shared by both agents) ───────────────────────────────────
+const storeBody = () => ({ store: ui.store, storeUri: $('#storeUri').value.trim() });
+async function loadGraph() {
+  const card = $('#graphCard');
+  const url = $('#url').value.trim();
+  if (!url) { card.className = 'graphcard'; card.replaceChildren(h('span', { class: 'hint' }, 'Enter a site link to see its graph.')); return; }
+  if (ui.store !== 'graph') { card.className = 'graphcard'; card.replaceChildren(h('span', { class: 'hint' }, 'Graph store: in memory. Each run maps the site again; pick Memgraph under "More settings" to keep one graph for both agents.')); return; }
+  const g = await api('/api/graph?url=' + encodeURIComponent(url) + '&storeUri=' + encodeURIComponent($('#storeUri').value.trim())).catch(x => ({ error: x.message }));
+  const busy = ui.job && (ui.job.status === 'running' || ui.job.status === 'waiting');
+  const build = label => h('button', { type: 'button', class: 'secondary', disabled: busy, onclick: async () => {
+    try { follow(await api('/api/graph', { url, storeUri: $('#storeUri').value.trim(), pages: Number($('#pages').value), deepen: $('#deepen').checked, rebuild: true })); } catch (x) { alert(x.message); } } }, label);
+  if (g.error) { card.className = 'graphcard'; card.replaceChildren(h('span', { class: 'err' }, g.error)); return; }
+  if (!g.exists) { card.className = 'graphcard'; card.replaceChildren(h('div', { class: 'gtitle' }, h('span', {}, 'No graph for this site yet'), build('Build graph')), h('div', { class: 'gsub' }, 'Build it once; demos and answers then reuse it. (A demo or a question also builds it on first use.)')); return; }
+  card.className = 'graphcard ok';
+  card.replaceChildren(...[
+    h('div', { class: 'gtitle' }, h('span', {}, 'Site graph saved'), build('Rebuild')),
+    g.purpose ? h('div', { class: 'gsub' }, g.purpose) : null,
+    h('div', { class: 'gsub' }, `${g.pages} pages · ${g.controls} controls · ${g.states} UI states · ${g.edges} actions`),
+    g.areas.length ? h('div', { class: 'areas' }, g.areas.map(a => h('span', { title: `${a.pages} pages` }, a.name))) : null,
+    g.top.length ? h('div', { class: 'gsub' }, `Most central: ${g.top.join(', ')}`) : null].filter(Boolean));
+}
+
+// ── Tabs: make a demo / ask a question ───────────────────────────────────────
+$('#tabs').addEventListener('click', e => {
+  const t = e.target.dataset?.tab;
+  if (!t) return;
+  ui.tab = t;
+  $('#tabs').querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.tab === t));
+  $('#compose').hidden = t !== 'demo';
+  $('#askForm').hidden = t !== 'ask';
+  if (t === 'ask') loadQuestions();
 });
+$('#askExamples').append(...ASK_EXAMPLES.map(e => h('button', { type: 'button', onclick: () => { $('#question').value = e; } }, e)));
+$('#askForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const err = $('#askErr');
+  err.hidden = true;
+  try {
+    follow(await api('/api/ask', { url: $('#url').value.trim(), question: $('#question').value.trim(), from: $('#from').value.trim(), clip: $('#askClip').checked,
+      pages: Number($('#pages').value), headed: $('#headed').checked, ...storeBody() }));
+  } catch (x) { err.textContent = x.message; err.hidden = false; }
+});
+async function loadQuestions() {
+  const list = await api('/api/questions').catch(() => []);
+  const ul = $('#questions');
+  if (!list.length) { ul.replaceChildren(h('li', { class: 'empty' }, 'No questions yet.')); return; }
+  ul.replaceChildren(...list.slice(0, 20).map(q => h('li', { onclick: () => { $('#question').value = q.question; } },
+    h('div', { style: 'min-width:0' }, h('div', { class: 'q' }, q.question), h('div', { class: 'u' }, q.site)),
+    h('div', { class: 'r' }, h('span', { class: q.found ? 'ok' : 'no' }, q.found ? 'answered' : 'not found'), h('br'), new Date(q.ts).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })))));
+}
+$('#refreshQ').addEventListener('click', loadQuestions);
+
+function showAnswer(job) {
+  const a = job.result || {};
+  const r = $('#result');
+  r.hidden = false;
+  const list = (a.kind === 'route' || a.kind === 'start' || a.kind === 'search') && a.found ? h('ol', {}, a.steps.map(t => h('li', {}, t.replace(/^\d+\.\s*/, ''))))
+    : h('ul', { style: 'list-style:none;margin-left:0' }, a.steps.map(t => h('li', {}, t)));
+  const title = { what: 'What you can do', start: 'Where to start', search: 'Found by searching the site', route: 'How to do it' }[a.kind] || 'Answer';
+  r.replaceChildren(...[
+    h('div', { class: 'card answer' },
+      h('h3', {}, a.found ? title : 'Not in this app'),
+      list,
+      h('div', { class: 'why' }, `${a.reason || ''}${a.by ? ` · decided by ${a.by}` : ''}${a.source ? ` · graph: ${a.source}` : ''}`)),
+    a.clipUrl ? h('div', { class: 'player' }, h('video', { src: a.clipUrl, controls: true, preload: 'metadata' })) : null,
+    a.clipError ? h('div', { class: 'card' }, h('b', {}, 'No clip: '), a.clipError) : null].filter(Boolean));
+}
 
 // ── Start a run ──────────────────────────────────────────────────────────────
 $('#compose').addEventListener('submit', async e => {
@@ -128,19 +206,29 @@ function follow(job) {
   es.addEventListener('state', e => {
     ui.job = JSON.parse(e.data);
     renderJob();
-    if (ui.job.status === 'done' || ui.job.status === 'error') { es.close(); loadHistory(); if (ui.job.runId) showRun(ui.job.runId, true); }
+    if (ui.job.status === 'done' || ui.job.status === 'error') {
+      es.close();
+      loadGraph();
+      if (ui.job.kind === 'ask') { if (ui.job.status === 'done') showAnswer(ui.job); loadQuestions(); return; }
+      if (ui.job.kind === 'graph') return;
+      loadHistory();
+      if (ui.job.runId) showRun(ui.job.runId, true);
+    }
   });
 }
 function scrollLog() { const pre = $('#log'); pre.scrollTop = pre.scrollHeight; $('#logCount').textContent = `· ${pre.textContent.split('\n').length} lines`; }
 
 function renderJob() {
   const j = ui.job;
-  $('#jobTitle').textContent = j.kind === 'make' ? j.label : j.label[0].toUpperCase() + j.label.slice(1);
-  $('#jobSub').textContent = j.runId ? `run ${j.runId}` : 'starting…';
+  $('#jobTitle').textContent = j.kind === 'make' ? j.label : j.kind === 'ask' ? `Q: ${j.label}` : j.label[0].toUpperCase() + j.label.slice(1);
+  $('#jobSub').textContent = j.kind === 'graph' ? 'building the site graph (crawl, explore, save)' : j.kind === 'ask' ? 'onboarding agent' : j.runId ? `run ${j.runId}` : 'starting…';
   const st = $('#jobStatus');
   st.className = 'pill ' + j.status;
   st.textContent = { running: 'Working', waiting: 'Needs you', done: 'Finished', error: 'Stopped' }[j.status];
   $('#start').disabled = j.status === 'running' || j.status === 'waiting';
+  $('#askBtn').disabled = $('#start').disabled;
+  // Graph builds and answers have no demo phases: no stepper
+  $('#stepper').hidden = j.kind === 'graph' || j.kind === 'ask';
 
   const at = j.kind === 'make' || j.kind === 'resume' ? (PHASE_STEP[j.phase] ?? 0) : 4;
   $('#stepper').replaceChildren(...STEPS.map((s, i) => {

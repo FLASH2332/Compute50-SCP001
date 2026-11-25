@@ -3,12 +3,12 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Demo Agent</title>
+  <title>Demo &amp; Onboarding Agents</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <header class="top">
-    <div class="brand"><span class="logo">▶</span> Demo Agent</div>
+    <div class="brand"><span class="logo">▶</span> Demo &amp; Onboarding Agents</div>
     <div class="chips" id="envChips"></div>
   </header>
 
@@ -16,14 +16,43 @@
 
   <main class="layout">
     <!-- ── Compose ─────────────────────────────────────────── -->
-    <form class="panel compose" id="compose" autocomplete="off">
-      <h2>New demo</h2>
-
+    <div class="leftcol">
+    <div class="panel site">
       <label class="field">
         <span class="label">Site link <span class="mode" id="modeBadge" hidden></span></span>
         <input id="url" type="url" placeholder="https://your-app.example.com" required>
         <span class="hint">Your own app (in <code id="allowHosts">localhost</code>) runs in <b>full</b> mode; any other site in <b>public</b> mode: links, tabs, dialogs and search only. <a href="#" id="useFixture">Use the local test site</a></span>
       </label>
+      <div class="graphcard" id="graphCard"><span class="hint">Enter a site link to see its graph.</span></div>
+    </div>
+
+    <div class="tabs" id="tabs">
+      <button type="button" data-tab="demo" class="on">Make a demo</button>
+      <button type="button" data-tab="ask">Ask a question</button>
+    </div>
+
+    <form class="panel compose" id="askForm" autocomplete="off" hidden>
+      <h2>Ask about the site</h2>
+      <label class="field">
+        <span class="label">Question</span>
+        <textarea id="question" rows="2" placeholder="e.g. how do I invite a teammate?"></textarea>
+        <span class="examples" id="askExamples"></span>
+      </label>
+      <label class="field">
+        <span class="label">The page you are on <span class="opt">optional</span></span>
+        <input id="from" type="url" placeholder="the answer starts from this page">
+      </label>
+      <label class="toggle"><input type="checkbox" id="askClip" checked><span></span>Record a short clip of the answer</label>
+      <button class="primary" id="askBtn" type="submit">Ask</button>
+      <p class="err" id="askErr" hidden></p>
+      <div class="history">
+        <div class="histhead"><h3>Questions asked</h3><button type="button" class="ghost" id="refreshQ">Refresh</button></div>
+        <ul id="questions"></ul>
+      </div>
+    </form>
+
+    <form class="panel compose" id="compose" autocomplete="off">
+      <h2>New demo</h2>
 
       <label class="field">
         <span class="label">What should the demo show?</span>
@@ -65,7 +94,7 @@
             <button type="button" data-v="none" class="on">In memory</button>
             <button type="button" data-v="graph">Memgraph / Neo4j</button>
           </div>
-          <input id="storeUri" placeholder="bolt://localhost:7688" hidden>
+          <input id="storeUri" placeholder="bolt://localhost:7687" hidden>
           <span class="hint" id="storeHint">The map is built for this run only. With a database, the first run saves the site's map and later runs reuse it.</span>
         </div>
         <label class="field"><span class="label">Saved section graph <span class="opt">optional</span></span><input id="graphFile" placeholder=".demo-runs/&lt;id&gt;/graph.json"><span class="hint">Use a graph file from the studio instead of crawling (path on the server)</span></label>
@@ -75,6 +104,7 @@
       <button class="primary" id="start" type="submit">Make the demo</button>
       <p class="err" id="composeErr" hidden></p>
     </form>
+    </div>
 
     <!-- ── Run / result ────────────────────────────────────── -->
     <section class="panel stage">
