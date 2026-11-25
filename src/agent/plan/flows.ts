@@ -153,8 +153,22 @@ function edgeTo(edges: { from: string; to: string; actionId: string }[], from: s
 }
 
 /** Fallback for vague goals (A3.3 stand-in until graph scores exist): coverage, dialogs, past success. */
-export function demoScore(f: Flow): number {
+/**
+ * demo_score (A3.3) for vague goals. With the graph builder's centralities: how central the flow's pages are
+ * (PageRank, betweenness), how many areas it spans, and past success. Without them: coverage and flow type.
+ */
+export function demoScore(f: Flow, map?: AppMap): number {
   const success = f.takes?.n ? f.takes.ok / f.takes.n : 1;
+  const pages = map ? f.pages.map(t => map.pageByTemplate(t)).filter((p): p is NonNullable<typeof p> => !!p) : [];
+  if (map && pages.some(p => p.rank !== undefined)) {
+    const all = Object.values(map.pages);
+    const maxRank = Math.max(...all.map(p => p.rank ?? 0)) || 1;
+    const maxBetween = Math.max(...all.map(p => p.betweenness ?? 0)) || 1;
+    const rank = Math.max(...pages.map(p => p.rank ?? 0)) / maxRank;
+    const between = pages.reduce((t, p) => t + (p.betweenness ?? 0), 0) / pages.length / maxBetween;
+    const areas = new Set(pages.map(p => p.areaId).filter(Boolean)).size / Math.max(1, Object.keys(map.areas).length);
+    return 0.35 * rank + 0.25 * between + 0.2 * areas + 0.1 * (f.source === 'dialog' ? 1 : 0.5) + 0.1 * success;
+  }
   return 0.5 * Math.min(1, f.pages.length / 3) + 0.3 * (f.source === 'dialog' ? 1 : f.source === 'tabs' ? 0.5 : 0) + 0.2 * success;
 }
 
@@ -165,7 +179,7 @@ export const estSeconds = (f: Flow) => 3 + f.steps.reduce((t, s) => t + (s.op ==
  * Without: goal words matched against flow names, labels and page titles;
  * a goal with no matches is "vague" and falls back to demoScore.
  */
-export async function findFlows(goal: string, audience: string, targetSec: number, flows: Flow[], states: Record<string, UiState>, llm?: TextModel): Promise<{ flows: Flow[]; vague: boolean; why: string }> {
+export async function findFlows(goal: string, audience: string, targetSec: number, flows: Flow[], states: Record<string, UiState>, llm?: TextModel, map?: AppMap): Promise<{ flows: Flow[]; vague: boolean; why: string }> {
   const usable = flows.filter(f => !f.broken);
   if (llm) {
     const reply = await llm.json<{ flowIds: string[]; vague: boolean; why: string }>(
@@ -179,7 +193,7 @@ export async function findFlows(goal: string, audience: string, targetSec: numbe
   const text = (f: Flow) => terms([f.name, f.summary, ...f.steps.map(s => s.label), ...f.steps.map(s => states[s.to]?.title || '')].join(' ')).join(' ');
   const scored = usable.map(f => ({ f, s: words.filter(w => text(f).includes(w)).length })).filter(x => x.s > 0).sort((a, b) => b.s - a.s || a.f.steps.length - b.f.steps.length);
   const vague = scored.length === 0;
-  const ranked = vague ? [...usable].sort((a, b) => demoScore(b) - demoScore(a)) : scored.map(x => x.f);
+  const ranked = vague ? [...usable].sort((a, b) => demoScore(b, map) - demoScore(a, map)) : scored.map(x => x.f);
   const out: Flow[] = [];
   let t = 4;
   const actions = (f: Flow) => f.steps.map(s => s.actionId).join('>');

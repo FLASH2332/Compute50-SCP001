@@ -13,13 +13,18 @@ export interface LineContext {
   isIntro: boolean;
   isLast: boolean;
   targetSec?: number;  // the shot's planned length: the line is written to fill it
+  site?: string;       // what the site is for (graph builder's profile), for the intro
 }
 
 const lc = (s: string) => s.charAt(0).toLowerCase() + s.slice(1);
 
 /** Deterministic line: the steps' intents joined, fields compressed when it must be short. */
 export function fallbackLine(c: LineContext, maxWords: number): string {
-  if (c.isIntro) return maxWords >= 8 ? `Here's ${c.title.replace(/\.$/, '')}. Let's take a quick tour.` : `Here's ${c.title.replace(/\.$/, '')}.`;
+  if (c.isIntro) {
+    const name = c.title.replace(/\.$/, '');
+    if (c.site && maxWords >= 6 + c.site.split(/\s+/).length) return `Here's ${name}: ${c.site.replace(/\.$/, '')}. Let's take a quick tour.`;
+    return maxWords >= 8 ? `Here's ${name}. Let's take a quick tour.` : `Here's ${name}.`;
+  }
   const parts = c.steps.map((s, i) => (i ? lc(s.intent) : s.intent));
   let line = parts.length > 1 ? `${parts.slice(0, -1).join(', ')}, then ${parts[parts.length - 1]}.` : `${parts[0]}.`;
   if (words(line) > maxWords) {
@@ -43,7 +48,7 @@ export async function writeLine(c: LineContext, maxWords: number, llm?: TextMode
   if (llm) {
     const r = await llm.json<Record<string, unknown>>(
       'You write voice-over for product demo videos: the spoken narration for one shot. Write about aimForWords words (never more than maxWords) so the narration fills the shot: say what is being done and briefly why it is useful to this audience. Name buttons, fields and sections exactly as they appear on screen, in “curly quotes”. No marketing fluff. No steps that are not listed. Return {"line": "..."}.',
-      JSON.stringify({ audience: c.audience, shot: c.title, intent: c.intent, aimForWords: Math.max(4, Math.round(maxWords * 0.9)), steps: c.steps.map(s => ({ action: s.op, label: s.label, value: s.value })), screenBefore: c.before, screenAfter: c.after, isIntro: c.isIntro, isLast: c.isLast, maxWords, previous, direction })
+      JSON.stringify({ site: c.site, audience: c.audience, shot: c.title, intent: c.intent, aimForWords: Math.max(4, Math.round(maxWords * 0.9)), steps: c.steps.map(s => ({ action: s.op, label: s.label, value: s.value })), screenBefore: c.before, screenAfter: c.after, isIntro: c.isIntro, isLast: c.isLast, maxWords, previous, direction })
     ).catch(() => null);
     // Slightly long lines are fine: the fit loop shortens them or holds the last frame
     // Models sometimes name the field differently ({"narration": ...}): take the first text value

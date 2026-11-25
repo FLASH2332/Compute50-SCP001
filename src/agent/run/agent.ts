@@ -82,7 +82,7 @@ export class Run {
     const shots = this.storyboard?.shots || [];
     shots.forEach((s, i) => {
       const st = s.stepIds.map(id => steps.get(id)!).filter(Boolean);
-      out.set(s.id, { intent: s.intent, title: s.title === 'Intro' ? s.chapter : s.title, steps: st, before: title(s.startState), after: title(st[st.length - 1]?.to || s.startState), audience: this.state.audience, isIntro: !s.flowId, isLast: i === shots.length - 1, targetSec: s.targetSec });
+      out.set(s.id, { intent: s.intent, title: s.title === 'Intro' ? s.chapter : s.title, steps: st, before: title(s.startState), after: title(st[st.length - 1]?.to || s.startState), audience: this.state.audience, isIntro: !s.flowId, isLast: i === shots.length - 1, targetSec: s.targetSec, site: this.map.app?.purpose });
     });
     return out;
   }

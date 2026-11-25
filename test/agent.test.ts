@@ -97,6 +97,32 @@ test('adapter reads the graph builder\'s fields: ranks, areas, profile, locators
   assert.equal(map.controls.a2.risk, 'mutating', '"Go" looks safe by label, but the builder saw it change data');
 });
 
+test('demo tours follow PageRank, cover each area once, and use areas as chapters', async () => {
+  const map = new AppMap({ source: 'test', startUrl: 'https://app.test/' });
+  const add = (path: string, title: string, rank: number, areaId?: string) => {
+    const url = `https://app.test${path}`;
+    const template = urlTemplate(url);
+    map.pages[url] = { id: url, url, title, template, rank, areaId };
+    map.sections[`s${path}`] = { id: `s${path}`, pageId: url, name: `${title} overview`, role: 'main', hidden: false, order: 0 };
+    map.addState({ id: `${template}|d=|t=`, template, pageId: url, url, title, dialog: '', tab: '', visibleActions: [], base: true });
+    return map.states[`${template}|d=|t=`];
+  };
+  const home = add('/', 'Home', 0.1);
+  const pages = [add('/a', 'Billing', 0.5, 'bill'), add('/b', 'Invoices', 0.4, 'bill'), add('/c', 'Team', 0.3, 'team'), add('/d', 'Help', 0.05)];
+  map.data.areas = { bill: { id: 'bill', name: 'Money', pageIds: [] }, team: { id: 'team', name: 'People', pageIds: [] } };
+  for (const p of pages) {
+    const id = `link${p.pageId}`;
+    map.controls[id] = { id, pageId: home.pageId, label: p.title, type: 'link', selector: `a[href="${p.url}"]`, visible: true, navigatesTo: p.pageId, risk: 'safe' };
+    home.visibleActions.push(id);
+    map.addEdge(home.id, p.id, id, 'link', 'safe');
+  }
+  const plan = await planDemo(map, 'show all features', '', 28);
+  const titles = plan.flows.flatMap(f => f.steps).filter(s => s.op === 'show').map(s => s.label.replace(' overview', ''));
+  assert.deepEqual(titles.slice(0, 3), ['Home', 'Billing', 'Team'], `tour: ${titles.join(', ')}`);
+  const sb = buildStoryboard('tour', '', 28, plan.flows, map, home.id);
+  assert.ok(sb.shots.some(s => s.chapter === 'Money') && sb.shots.some(s => s.chapter === 'People'), sb.shots.map(s => s.chapter).join(', '));
+});
+
 test('site modes: allow-listed hosts are full, everything else is public', () => {
   assert.equal(modeFor('https://www.example.com/'), 'public');
   assert.equal(modeFor('http://127.0.0.1:5050/'), 'full');

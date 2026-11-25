@@ -46,7 +46,8 @@ function buildRefs(map: AppMap, flows: Flow[]): Refs {
   pages.forEach((p, i) => {
     const P = `P${i + 1}`;
     refs.pages.set(P, p);
-    lines.push(`${P} ${q(p.title)} ${new URL(p.url).pathname}${menu.get(p.id) === 2 ? ' [main menu]' : menu.has(p.id) ? ' [linked from start]' : ''}`);
+    const area = p.areaId && map.areas[p.areaId]?.name;
+    lines.push(`${P} ${q(p.title)} ${new URL(p.url).pathname}${menu.get(p.id) === 2 ? ' [main menu]' : menu.has(p.id) ? ' [linked from start]' : ''}${area ? ` [area: ${area}]` : ''}${p.rank !== undefined ? ` [rank ${p.rank.toFixed(2)}]` : ''}`);
     for (const s of map.sectionsOfPage(p.id).filter(s => !s.hidden && SHOWN_ROLES.has(s.role)).slice(0, 12)) {
       const S = `S${++si}`;
       refs.sections.set(S, s);
@@ -93,11 +94,12 @@ export async function planDemo(map: AppMap, request: string, audience: string, s
         'Use only these step kinds: open_page {ref:P#}, show_section {ref:S#} (a section of the CURRENT page), flow {ref:F#}, search {ref:Q#, query}, open_result {text}.',
         'Start on P1. Use open_page to move; show_section only for sections listed under the current page.',
         'After search, the results page is not in the map: follow it with open_result {text: what to click}, then you may open_result again on the next page.',
+        'Higher [rank] pages are more central; for an overview, show one page per [area].',
         'Cover EVERY part of the request, in the order asked. If it asks for an overview, all features or to explain the site, first visit the main pages ([main menu] / [linked from start], skip pagination) and show each one\'s key section, then do the specific task.',
         `Use the whole time budget: plan about ${Math.max(4, Math.round(seconds / 6))} steps (each step is shown for ~5-7 seconds). Do not invent pages, sections or searches.`,
         'Return {"steps": [...], "why": "one sentence"}, for example {"steps": [{"kind": "open_page", "ref": "P2"}, {"kind": "show_section", "ref": "S5"}, {"kind": "search", "ref": "Q1", "query": "python"}, {"kind": "open_result", "text": "Python Tutorial"}], "why": "..."}.'
       ].join(' '),
-      JSON.stringify({ request, audience, seconds, map: refs.text })
+      JSON.stringify({ request, audience, seconds, site: map.app?.purpose, areas: Object.values(map.areas).map(a => a.name), map: refs.text })
     );
     let r: { steps: PlanStep[]; why?: string } | null = null;
     for (let i = 0; i < 2 && !r; i++) r = await ask().catch(e => { fallbackWhy = `LLM call failed: ${(e as Error).message.split('\n')[0].slice(0, 160)}`; return null; });
@@ -165,8 +167,15 @@ function mainPages(map: AppMap): Map<string, number> {
 function tourSteps(map: AppMap, refs: Refs, seconds: number): PlanStep[] {
   const perPage = 7;
   const menu = mainPages(map);
-  const ranked = [...refs.pages].filter(([P, p]) => P === 'P1' || (!p.template.includes('{id}') && !/page \d+/i.test(p.title)))
-    .sort(([A, a], [B, b]) => Number(B === 'P1') - Number(A === 'P1') || (menu.get(b.id) || 0) - (menu.get(a.id) || 0));
+  const candidates = [...refs.pages].filter(([P, p]) => P === 'P1' || (!p.template.includes('{id}') && !/page \d+/i.test(p.title)));
+  // With the graph builder's PageRank: most central pages first; else pages from the start page's menu first
+  const ranks = candidates.some(([, p]) => p.rank !== undefined);
+  const score = (p: AppPage) => (ranks ? (p.rank ?? 0) : 0) * 10 + (menu.get(p.id) || 0);
+  const ordered = candidates.sort(([A, a], [B, b]) => Number(B === 'P1') - Number(A === 'P1') || score(b) - score(a));
+  // Cover the app's areas: the best page of each area first, then the rest by rank
+  const seen = new Set<string>();
+  const firstOfArea = ordered.filter(([P, p]) => { if (P === 'P1' || !p.areaId || seen.has(p.areaId)) return P === 'P1'; seen.add(p.areaId); return true; });
+  const ranked = [...firstOfArea, ...ordered.filter(x => !firstOfArea.includes(x))];
   const pages = ranked.map(([P]) => P).slice(0, Math.max(2, Math.floor(seconds / perPage)));
   const steps: PlanStep[] = [];
   for (const P of pages) {
@@ -206,7 +215,7 @@ async function rulesPlan(map: AppMap, refs: Refs, known: Flow[], request: string
     steps.push({ kind: 'search', ref: search, query }, { kind: 'open_result', text: query });
     why.push(`a search for "${query}" and its best result`);
   } else if (!wantsTour) {
-    const picked = await findFlows(request, audience, seconds, known, map.states);
+    const picked = await findFlows(request, audience, seconds, known, map.states, undefined, map);
     const F = picked.flows.map(f => [...refs.flows].find(([, g]) => g.id === f.id)?.[0]).filter(Boolean) as string[];
     if (F.length) { steps.push(...F.map(ref => ({ kind: 'flow' as const, ref }))); why.push(picked.why); }
     else return { flows: picked.flows, why: picked.why, by: 'rules', steps: [] };

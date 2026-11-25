@@ -29,6 +29,9 @@ const MIN_SHOT_SEC = 3;
 /** Chapter of a state: the page's title (until A3.4 Features exist). */
 export function chapterOf(graph: AppMap, stateId: string): string {
   const s = graph.states[stateId];
+  // The graph builder's areas name the parts of the app ("Billing", "Team"); else the page title
+  const area = s && graph.pages[s.pageId]?.areaId;
+  if (area && graph.areas[area]) return graph.areas[area].name;
   return (s?.title || s?.template || 'App').split(/[·|–-]/)[0].trim();
 }
 
@@ -46,7 +49,7 @@ export function buildStoryboard(goal: string, audience: string, targetSec: numbe
       const chunk = f.steps.slice(i, i + per);
       shots.push({
         id: `shot${shots.length + 1}`, flowId: f.id, stepIds: chunk.map(s => s.id), startState: chunk[0].from || f.startState,
-        intent: chunk.map(s => s.intent).join(', then '), targetSec: 0, chapter: chapterOf(graph, chunk[0].from || f.startState),
+        intent: chunk.map(s => s.intent).join(', then '), targetSec: 0, chapter: chapterOf(graph, [...chunk].reverse().find(s => s.to)?.to || chunk[0].from || f.startState),
         title: f.steps.length > per ? `${f.name} (${i / per + 1})` : f.name
       });
     }
