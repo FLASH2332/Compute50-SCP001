@@ -1,4 +1,4 @@
-﻿node_modules/
+node_modules/
 dist/
 .env
 .claude/
@@ -8,3 +8,8 @@ section-audit-*/
 
 *.mp4
 runs/
+
+# benchmark harness
+bench/snapshots/
+bench/results/
+bench/report/

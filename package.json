@@ -12,9 +12,17 @@
     "test": "tsx --test test/*.test.ts",
     "agent": "tsx src/agent/cli.ts",
     "fixture": "tsx src/agent/util/staticServer.ts test-site 5050",
-    "onboard": "tsx src/agent/onboard/cli.ts"
+    "onboard": "tsx src/agent/onboard/cli.ts",
+    "bench:agent": "tsx bench/agent/cli.ts",
+    "bench:crawl": "tsx bench/crawl.ts",
+    "bench:mcp": "tsx bench/mcp/server.ts",
+    "bench:typecheck": "tsc -p bench/tsconfig.json",
+    "bench:crawl-all": "tsx bench/crawlAll.ts",
+    "bench:run": "tsx bench/run.ts",
+    "bench:report": "tsx bench/report.ts"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.2",
     "cors": "^2.8.5",
     "cytoscape": "3.30.4",
     "dotenv": "^16.4.7",
@@ -22,7 +30,8 @@
     "groq-sdk": "^1.6.0",
     "neo4j-driver": "^5.28.1",
     "playwright": "^1.50.0",
-    "ws": "^8.18.0"
+    "ws": "^8.18.0",
+    "zod": "3.25.76"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",

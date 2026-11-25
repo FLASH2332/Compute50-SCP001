@@ -25,6 +25,15 @@ export interface SitePage {
   discoveredAt: string;
   redirectedTo?: string;
   pagination?: { startUrl: string; clicks: number; signature?: string };
+  // Added after the crawl (enrich.ts):
+  urlTemplate?: string;     // /product/:id
+  urlPattern?: string;      // regex: browser URLs of this page's template map to this page (template representative)
+  pagerank?: number;
+  betweenness?: number;
+  harmonic?: number;
+  community?: number;
+  reachable?: boolean;      // reachable from the start page by links / clicks
+  deadEnd?: boolean;        // opened, but has no way out
 }
 
 export interface SiteLink {
@@ -35,6 +44,8 @@ export interface SiteLink {
   next: boolean;
   via?: 'button';
   interactionId?: string;   // reached by clicking a (non-link) button, see Interaction
+  reliability?: number;     // (s+1)/(n+2) from what the crawl saw
+  cost?: number;            // routing cost: 1 + 2·(−ln reliability) + risk cost
 }
 
 export interface PageSection {
@@ -50,6 +61,7 @@ export interface PageSection {
   actionCount: number;      // actions stored (after grouping repeats)
   totalActions: number;     // actions found before grouping
   summary: string;          // plain description built from the section's actions
+  modal?: boolean;          // a dialog that blocks the page behind it
 }
 
 export interface SectionAction {
@@ -64,6 +76,21 @@ export interface SectionAction {
   external?: boolean;       // link leaves the site
   visible: boolean;
   groupSize?: number;       // >1 when this stands for a group of repeated links
+  // Richer capture (ported from the old SiteGraph extractor):
+  role?: string;            // ARIA role (explicit or implicit)
+  name?: string;            // accessible name
+  locators?: string[];      // tried in order: role=<r>|name=<n>, testid=<id>, css=<unique path>, text=<name>, item=<css>
+  fingerprint?: { role: string; name: string; tag: string; attrs: Record<string, string | null>; gcss: string; css: string; bbox: number[] };
+  risk?: 'read' | 'navigate' | 'input' | 'submit_safe' | 'submit_mutating' | 'external' | 'destructive';
+  inferred?: boolean;       // no ARIA role, but clickable (click handler, pointer cursor, tabindex, btn class)
+  hoverable?: boolean;      // opens a popup / submenu
+  hrefTemplate?: string;    // URL template of href
+  // List templates: one action that stands for every item of a repeated list
+  isTemplate?: boolean;
+  count?: number;
+  samples?: string[];       // item texts; pass one as `item` to pick that item
+  reliability?: number;
+  cost?: number;
 }
 
 /** What happened when a button/tab was clicked (in a read-only browser). */
@@ -77,6 +104,8 @@ export interface Interaction {
   kind: 'dialog' | 'panel' | 'navigate' | 'nothing';
   result: string;           // e.g. 'Opens "Sign in to register"'
   resultUrl?: string;       // for kind 'navigate'
+  reliability?: number;
+  cost?: number;
 }
 
 export interface SectionGraphModel {
@@ -91,7 +120,23 @@ export interface SectionGraphModel {
     remaining: number;
     reason: 'frontier exhausted' | 'page limit' | 'depth limit' | 'blocked' | 'stopped';
   };
+  // Node / edge types beyond the core schema: App, Template, Area (see bench/README.md)
+  extraNodes?: ExtraNode[];
+  extraEdges?: ExtraEdge[];
+  buildStats?: {
+    llmCalls: number;
+    mode: ExploreMode;
+    rounds: number;          // guided rounds
+    skipped: number;         // targets dropped by skip patterns
+    deferred: number;        // look-alike pages opened only after everything else
+    profile: boolean;        // a site profile was made
+  };
 }
+
+export type ExploreMode = 'brute' | 'guided' | 'auto';
+
+export interface ExtraNode { label: string; id: string; props: Record<string, unknown> }
+export interface ExtraEdge { type: string; from: { label: string; id: string }; to: { label: string; id: string }; props?: Record<string, unknown> }
 
 export interface SectionCrawlConfig {
   startUrl: string;
@@ -107,6 +152,9 @@ export interface SectionCrawlConfig {
   probeClicks?: boolean;      // click buttons/tabs to learn what they do (read-only mode only)
   maxProbePages?: number;     // pages whose buttons are probed (default 3)
   maxClicksPerPage?: number;  // buttons probed per page (default 6)
+  explore?: ExploreMode;      // brute: breadth first; guided: a model picks frontier groups; auto (default): decides
+  templateCap?: number;       // pages opened per URL template before look-alikes are deferred (default 3)
+  useLlm?: boolean;           // false: no model calls (bootstrap, guided picks, area names)
 }
 
 export type SectionCrawlEvent =

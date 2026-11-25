@@ -1,3 +1,5 @@
+// Crawls in tests never call a model (site profile, guided picks, area names): fast and deterministic
+process.env.GRAPH_LLM ??= 'off';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { chromium } from 'playwright';
@@ -92,9 +94,15 @@ test('splits a page into sections, groups repeated cards, keeps menus, records f
     assert.ok(menu.find(a => a.label === 'Partner')?.external);
 
     // Repeated cards /events/* are grouped: 3 kept, each standing for 12
-    const events = actionsOf('Upcoming events');
+    const events = actionsOf('Upcoming events').filter(a => !a.isTemplate);
     assert.equal(events.length, 3);
     assert.ok(events.every(a => a.groupSize === 12));
+    // ...plus one list template that stands for all 12 cards (new_graph_base)
+    const list = actionsOf('Upcoming events').filter(a => a.isTemplate);
+    assert.equal(list.length, 1);
+    assert.equal(list[0].count, 12);
+    assert.equal(list[0].samples?.length, 12);
+    assert.ok(list[0].locators?.[0].startsWith('item='));
     assert.equal(byName('Upcoming events').totalActions, 12);
     assert.equal(m.links?.filter(link => new URL(link.url).pathname.startsWith('/events/')).length, 12);
 
