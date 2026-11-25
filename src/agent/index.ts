@@ -16,15 +16,20 @@ export { editDemo, undoDemo, listVersions } from './run/edit.js';
 export { AutoApprover, CliApprover } from './providers/approvers.js';
 export { ElevenLabsSpeech, SilentSpeech, speechFromEnv } from './providers/speech.js';
 export { GroqText, GroqVision, groqFromEnv } from './providers/groq.js';
+export { ClaudeCodeText, claudeFromEnv } from './providers/claude.js';
 export type { Finding } from './media/check.js';
 export { OnboardingAgent, createOnboardingAgent, type AskInput, type AskResult, type OnboardingConfig } from './onboard/agent.js';
 export { NOT_FOUND } from './onboard/understand.js';
 
 import type { Services } from './core/ports.js';
+import { claudeFromEnv } from './providers/claude.js';
 import { groqFromEnv } from './providers/groq.js';
 import { speechFromEnv } from './providers/speech.js';
 
-/** Default providers from environment variables (Groq, ElevenLabs); missing keys → offline fallbacks. */
+/**
+ * Default providers from environment variables: the text model from Claude Code (AGENT_LLM=claude) or
+ * Groq, the vision model from Groq, the voice from ElevenLabs; missing keys → offline fallbacks.
+ */
 export function servicesFromEnv(env = process.env): Partial<Services> {
-  return { ...groqFromEnv(env), speech: speechFromEnv(env) };
+  return { ...groqFromEnv(env), ...claudeFromEnv(env), speech: speechFromEnv(env) };
 }

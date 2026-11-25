@@ -51,6 +51,7 @@ Useful options:
 | Key | Used for | Without it |
 | --- | --- | --- |
 | `GROQ_API_KEY` (+`GROQ_MODEL`) | the agents: planning, narration, edits, picking answers | keyword rules |
+| `AGENT_LLM=claude` (+`CLAUDE_MODEL`, default `sonnet`) | the same agent work through the Claude Code CLI (`claude -p`), on the subscription it is logged in with instead of an API key. Overrides `GROQ_API_KEY` for text; Groq still does vision if set. Counts against the plan's usage limits | — |
 | `ELEVENLABS_API_KEY` + `ELEVENLABS_VOICE_ID` | voice | silent track + captions |
 | `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY` | the **graph builder**: site profile, guided crawl, area names. Any OpenAI-compatible server: a local Ollama, or Groq (`https://api.groq.com/openai/v1`, `openai/gpt-oss-20b`, your Groq key) | brute-force crawl; areas named after their top page; no profile |
 | `NEO4J_URI` | graph database (default `bolt://localhost:7687`) | — |
@@ -94,7 +95,7 @@ src/agent/
   run/                 DemoAgent (phases), edit / undo / versions
   onboard/             OnboardingAgent: understand (question → route), overview (areas, PageRank), search fallback,
                        answer (text steps), show (clip, cached)
-  providers/           Groq, ElevenLabs / silent speech, CLI / auto approver
+  providers/           Groq, Claude Code CLI, ElevenLabs / silent speech, CLI / auto approver
   adapters/            sectionGraph.ts: graph builder → AppMap; graphDbStore.ts: Memgraph/Neo4j MapStore
   cli.ts, graphCli.ts, onboard/cli.ts   composition roots
 ```

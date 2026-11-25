@@ -192,12 +192,14 @@ const validRunId = (id: string) => /^[\w.-]+$/.test(id) && fs.existsSync(path.jo
 /** What this agent supports, and what this machine has (booleans only, never key values). */
 app.get('/api/options', async (_req, res) => {
   const ffmpeg = await hasExe(process.env.FFMPEG_PATH || 'ffmpeg');
+  const claudeLlm = (process.env.AGENT_LLM || '').toLowerCase() === 'claude';
   res.json({
     styles: Object.values(PRESETS),
     defaults: { seconds: 60, takes: 1, pages: 20, extras: true, deepen: true, review: true, headed: false, rebuild: false },
     env: {
       envFile: !!envFile,
-      llm: !!process.env.GROQ_API_KEY, llmModel: process.env.GROQ_API_KEY ? (process.env.GROQ_MODEL || 'openai/gpt-oss-20b') : null,
+      llm: claudeLlm || !!process.env.GROQ_API_KEY, llmProvider: claudeLlm ? 'Claude Code' : process.env.GROQ_API_KEY ? 'Groq' : null,
+      llmModel: claudeLlm ? `claude ${process.env.CLAUDE_MODEL || 'sonnet'}` : process.env.GROQ_API_KEY ? (process.env.GROQ_MODEL || 'openai/gpt-oss-20b') : null,
       vision: !!(process.env.GROQ_API_KEY && process.env.GROQ_VISION_MODEL),
       voice: process.env.ELEVENLABS_API_KEY ? 'elevenlabs' : 'silent',
       ffmpeg,

@@ -45,7 +45,7 @@ async function loadOptions() {
   ui.ffmpeg = o.env.ffmpeg;
   const chips = $('#envChips');
   chips.replaceChildren(...[
-    h('span', { class: 'chip ' + (o.env.llm ? 'ok' : '') , title: o.env.llm ? `Planning and narration by ${o.env.llmModel}` : 'Set GROQ_API_KEY in .env for LLM planning and narration' }, o.env.llm ? 'Planner: Groq' : 'Planner: keyword rules'),
+    h('span', { class: 'chip ' + (o.env.llm ? 'ok' : '') , title: o.env.llm ? `Planning and narration by ${o.env.llmModel}` : 'Set GROQ_API_KEY (or AGENT_LLM=claude) in .env for LLM planning and narration' }, o.env.llm ? `Planner: ${o.env.llmProvider || 'Groq'}` : 'Planner: keyword rules'),
     h('span', { class: 'chip ' + (o.env.voice === 'elevenlabs' ? 'ok' : ''), title: o.env.voice === 'elevenlabs' ? 'ElevenLabs voice' : 'Set ELEVENLABS_API_KEY for a real voice; captions still work' }, o.env.voice === 'elevenlabs' ? 'Voice: ElevenLabs' : 'Voice: silent + captions'),
     h('span', { class: 'chip ' + (o.env.ffmpeg ? 'ok' : 'warn') }, o.env.ffmpeg ? 'FFmpeg: ready' : 'FFmpeg: missing'),
     o.env.vision ? h('span', { class: 'chip ok' }, 'Take review: vision') : null].filter(Boolean)

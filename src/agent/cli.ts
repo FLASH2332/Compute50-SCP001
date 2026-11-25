@@ -25,7 +25,8 @@ crawls it and saves the graph; later runs reuse it. --rebuild crawls again, --no
 Sites: hosts in DEMO_ALLOW_HOSTS (default localhost) run in full mode (forms, approved submits). Any other
 site runs in public mode: links, tabs, dialogs and search boxes only; nothing else is typed or submitted.
 
-Optional keys: GROQ_API_KEY (+GROQ_MODEL, GROQ_VISION_MODEL), ELEVENLABS_API_KEY + ELEVENLABS_VOICE_ID.`;
+Optional keys: GROQ_API_KEY (+GROQ_MODEL, GROQ_VISION_MODEL), ELEVENLABS_API_KEY + ELEVENLABS_VOICE_ID.
+AGENT_LLM=claude (+CLAUDE_MODEL) plans and narrates through the Claude Code CLI on its subscription login instead of Groq.`;
 
 function parse(argv: string[]) {
   const flags: Record<string, string | boolean> = {};
