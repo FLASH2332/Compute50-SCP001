@@ -71,8 +71,12 @@ const OPENERS = new Set(['here', "here's", 'heres', 'click', 'then', 'now', 'nex
  * clicks. The later line is the one flagged (and rewritten).
  */
 export function checkRepetition(tl: Timeline): Finding[] {
+  return repetitionInLines(tl.shots.filter(s => s.voice?.line).map(s => ({ id: s.shotId, text: s.voice!.line })));
+}
+
+/** The repetition rules over plain lines in order (used on the script before anything is recorded). */
+export function repetitionInLines(lines: { id: string; text: string }[]): Finding[] {
   const out: Finding[] = [];
-  const lines = tl.shots.filter(s => s.voice?.line).map(s => ({ id: s.shotId, text: s.voice!.line }));
   const tokens = (t: string) => t.toLowerCase().replace(/[“”"‘’]/g, '').replace(/[^a-z0-9' ]+/g, ' ').split(/\s+/).filter(Boolean);
   const openerSeen = new Map<string, string>();
   const grams = new Map<string, string>();

@@ -73,6 +73,7 @@ export async function showClip(map: AppMap, flow: Flow, services: Services, opts
   if (!take.ok) throw new Error(`Recording the answer failed: ${take.error || 'a step did not pass'}`);
 
   const preset = PRESETS.calm;
+  await run.ensureScript(services.llm);
   const { tl } = run.buildTimeline(preset);
   await voiceTimeline(tl, run.lineContexts(), preset, run.dir, { speech: services.speech, llm: services.llm });
   const r = await renderTimeline(run.dir, tl, { name: 'answer', extras: false });

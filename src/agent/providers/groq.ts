@@ -7,7 +7,8 @@ async function chat(apiKey: string, model: string, messages: { role: 'system' | 
   const res = await fetch(URL_, {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({ model, messages, temperature: 0.2, max_completion_tokens: 2500, response_format: { type: 'json_object' } }),
+    // Reasoning models (gpt-oss) think before answering; that counts against the tokens-per-minute limit, so keep it low
+    body: JSON.stringify({ model, messages, temperature: 0.2, max_completion_tokens: 2500, response_format: { type: 'json_object' }, ...(/gpt-oss/.test(model) ? { reasoning_effort: process.env.GROQ_REASONING_EFFORT || 'low' } : {}) }),
     signal: AbortSignal.timeout(60000)
   });
   if (!res.ok) throw new Error(`Groq ${res.status}: ${(await res.text()).slice(0, 300)}`);

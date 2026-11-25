@@ -11,6 +11,9 @@ import { ChangeLog } from '../nav/changes.js';
 import { Gate } from '../nav/gate.js';
 import { modeFor } from '../nav/risk.js';
 import type { Flow } from '../plan/flows.js';
+import { resolveLine, WPS, writeScript, type Script } from '../media/script.js';
+import { words } from '../media/voice.js';
+import type { TextModel } from '../core/ports.js';
 import { planDemo } from '../plan/planner.js';
 import { approveStoryboard, buildStoryboard, type Storyboard } from '../plan/storyboard.js';
 import { AutoApprover } from '../providers/approvers.js';
@@ -48,6 +51,7 @@ export class Run {
   map!: AppMap;
   flows: Flow[] = [];
   storyboard?: Storyboard;
+  script?: Script;            // the voice-over, written once after approval (script.json)
   changes: ChangeLog;
 
   constructor(public dir: string) {
@@ -65,6 +69,7 @@ export class Run {
     r.map = AppMap.load(r.p('map.json'));
     if (fs.existsSync(r.p('flows.json'))) r.flows = r.read('flows.json');
     if (fs.existsSync(r.p('storyboard.json'))) r.storyboard = r.read('storyboard.json');
+    if (fs.existsSync(r.p('script.json'))) r.script = r.read('script.json');
     return r;
   }
 
@@ -73,6 +78,16 @@ export class Run {
     this.map.save(this.p('map.json'));
     this.write('flows.json', this.flows);
     if (this.storyboard) this.write('storyboard.json', this.storyboard);
+    if (this.script) this.write('script.json', this.script);
+  }
+
+  /** Writes the voice-over script once (after approval), unless the run already has one. */
+  async ensureScript(llm?: TextModel, wps: number = WPS.calm): Promise<Script> {
+    if (this.script) return this.script;
+    const ctx = this.lineContexts();
+    this.script = await writeScript((this.storyboard?.shots ?? []).map(s => ({ shotId: s.id, c: ctx.get(s.id)!, seconds: s.targetSec })), { llm, wps });
+    this.write('script.json', this.script);
+    return this.script;
   }
 
   lineContexts(): Map<string, LineContext> {
@@ -82,7 +97,11 @@ export class Run {
     const shots = this.storyboard?.shots || [];
     shots.forEach((s, i) => {
       const st = s.stepIds.map(id => steps.get(id)!).filter(Boolean);
-      out.set(s.id, { intent: s.intent, title: s.title === 'Intro' ? s.chapter : s.title, steps: st, before: title(s.startState), after: title(st[st.length - 1]?.to || s.startState), audience: this.state.audience, isIntro: !s.flowId, isLast: i === shots.length - 1, targetSec: s.targetSec, goal: this.state.goal, site: this.map.app?.purpose });
+      // The script's line for this shot; a result title known only after recording replaces {result}
+      const sc = this.script?.shots[s.id];
+      const result = sc?.dynamic ? this.state.takes[s.id]?.steps.filter(r => st.find(x => x.id === r.stepId)?.op === 'open_result').map(r => r.label).filter(Boolean).pop() : undefined;
+      out.set(s.id, { intent: s.intent, title: s.title === 'Intro' ? s.chapter : s.title, steps: st, before: title(s.startState), after: title(st[st.length - 1]?.to || s.startState), audience: this.state.audience, isIntro: !s.flowId, isLast: i === shots.length - 1, targetSec: s.targetSec, goal: this.state.goal, site: this.map.app?.purpose,
+        draft: sc ? resolveLine(sc, result) : undefined });
     });
     return out;
   }
@@ -215,6 +234,10 @@ export class DemoAgent {
         run.storyboard = buildStoryboard(s.goal, s.audience, s.seconds, plan.flows, run.map, start.id);
         run.storyboard.why = `${plan.why} (${plan.by === 'llm' ? 'planned by the LLM' : 'keyword rules'})`;
         await approveStoryboard(run.storyboard, run.flows, approver, llm, this.log);
+        // The voice-over is written once, now, and reused by the samples, the final video and edits
+        const script = await run.ensureScript(llm, s.style === 'fast' ? WPS.fast : WPS.calm);
+        this.log(`Script: ${Object.values(script.shots).map(x => `${x.shotId} (${words(x.line)} words, ${x.by})`).join(', ')}`);
+        for (const n of script.notes) this.log(n);
         s.phase = 'sample';
         run.save();
       }

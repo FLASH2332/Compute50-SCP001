@@ -249,6 +249,37 @@ test('narration: repetition is flagged; route clicks are not narrated', () => {
   assert.ok(!/geeksforgeeks”/.test(line) && /DSA Tutorial/.test(line), line);
 });
 
+test('script: written once before recording, one beat per step, repetition fixed, result filled in later', async () => {
+  const { writeScript, resolveLine } = await import('../src/agent/media/script.js');
+  const step = (id: string, op: string, label: string, extra: object = {}) => ({ id, op, actionId: '', label, from: 'a', to: 'b', intent: '', ...extra }) as any;
+  const ctx = (steps: any[], extra: object = {}) => ({ intent: '', title: 'Shop', before: 'Home', after: 'Courses page', audience: '', isIntro: false, isLast: false, steps, ...extra });
+  const items = [
+    { shotId: 'shot1', c: ctx([], { isIntro: true }), seconds: 3 },
+    { shotId: 'shot2', c: ctx([step('r1', 'click', 'logo', { route: true }), step('r2', 'click', 'Courses', { route: true }), step('s1', 'show', 'Courses')]), seconds: 8 },
+    { shotId: 'shot3', c: ctx([step('q1', 'search', 'Search', { value: 'python' }), step('o1', 'open_result', 'python', { value: 'python' })], { isLast: true }), seconds: 9 }
+  ];
+  let calls = 0;
+  const llm = { async json<T>(): Promise<T> {
+    calls++;
+    if (calls === 1) return { shots: {
+      shot1: { beats: [{ step: '', text: 'Welcome to the shop, home of free courses.' }] },
+      shot2: { beats: [{ step: 'r1', text: "Let's head to the courses." }, { step: 's1', text: 'Here you can browse every track.' }] },
+      shot3: { beats: [{ step: 'q1', text: "Let's head to the search box and look for python." }, { step: 'o1', text: '{result} looks like a good fit.' }] }
+    } } as T;
+    // Second call fixes the repeated opener in shot3 only
+    return { shots: { shot3: { beats: [{ step: 'q1', text: 'Searching for python narrows it down.' }, { step: 'o1', text: '{result} is a good fit.' }] } } } as T;
+  } };
+  const script = await writeScript(items as any, { llm, style: 'be brief' });
+  assert.equal(calls, 2, 'one call for the script, one to fix repetition');
+  assert.deepEqual(script.shots.shot2.beats.map(b => b.stepId), ['r1', 's1'], 'routing clicks share one "arrive" beat');
+  assert.ok(script.shots.shot3.dynamic);
+  assert.equal(resolveLine(script.shots.shot3, 'Python Crash Course'), 'Searching for python narrows it down. “Python Crash Course” is a good fit.');
+  // No model: every shot still gets beats from the rules
+  const rules = await writeScript(items as any, {});
+  assert.ok(Object.values(rules.shots).every(s => s.by === 'rules' && s.line && s.beats.length));
+  assert.ok(!/logo/.test(rules.shots.shot2.line), rules.shots.shot2.line);
+});
+
 // ── Against the fixture app (section-graph crawler → adapter → agent) ──────
 
 describe('fixture app', () => {

@@ -47,58 +47,30 @@ export function loadStyle(file = process.env.NARRATION_STYLE_FILE): string {
   return '';
 }
 
+/** One beat: what one step (or a run of routing clicks) shows, for the writer. */
+export interface Beat { step: string; beat: string; [k: string]: unknown }
+
 /**
- * What a shot shows, for the writer. Route beats (the clicks that only get us
- * to a page: logo, menu links) are reduced to "arrive at <page>", so the
+ * What a shot shows, for the writer, one beat per step. Route steps (the clicks that only
+ * get us to a page: logo, menu links) collapse into one "arrive at <page>" beat, so the
  * narration says where we are going instead of naming every click.
  */
-function beats(c: LineContext) {
-  const out: Record<string, unknown>[] = [];
+export function beatList(c: LineContext): Beat[] {
+  const out: Beat[] = [];
   const route = c.steps.filter(s => s.route);
-  if (route.length) out.push({ beat: 'arrive', page: c.after });
+  if (route.length) out.push({ step: route[0].id, beat: 'arrive', page: c.after });
   for (const s of c.steps.filter(s => !s.route)) {
-    if (s.op === 'show') out.push({ beat: 'show section', name: s.label });
-    else if (s.op === 'search') out.push({ beat: 'search', query: s.value });
-    else if (s.op === 'open_result') out.push({ beat: 'open result', title: s.label });
-    else if (s.op === 'goto') out.push({ beat: 'arrive', page: s.label });
-    else out.push({ beat: s.op, control: s.label, value: s.value });
+    if (s.op === 'show') out.push({ step: s.id, beat: 'show section', name: s.label });
+    else if (s.op === 'search') out.push({ step: s.id, beat: 'search', query: s.value });
+    else if (s.op === 'open_result') out.push({ step: s.id, beat: 'open result', title: s.label });
+    else if (s.op === 'goto') out.push({ step: s.id, beat: 'arrive', page: s.label });
+    else out.push({ step: s.id, beat: s.op, control: s.label, value: s.value });
   }
   return out;
 }
+const beats = (c: LineContext) => beatList(c).map(({ step, ...b }) => b);
 
 const wordBudget = (sec: number) => Math.max(4, Math.floor(sec * 2.4));
-
-// ── Whole script in one pass ───────────────────────────────────────────────
-
-/**
- * Writes every shot's line in ONE call, so the narration reads as a single
- * story (welcome → what each part is for → the task → wrap-up) and the model
- * can see and avoid its own repetitions. Lines that come back too long or
- * empty are left to the per-shot writer.
- */
-export async function writeScript(contexts: { id: string; c: LineContext; seconds: number }[], deps: VoiceDeps): Promise<Map<string, string>> {
-  const out = new Map<string, string>();
-  if (!deps.llm || !contexts.length) return out;
-  const first = contexts[0].c;
-  const r = await deps.llm.json<Record<string, unknown>>(
-    [
-      'You write the voice-over script for a screen-recorded product demo: one line of narration per shot, read aloud while the shot plays.',
-      'Follow this style guide exactly:', deps.style || '',
-      'Each shot lists its beats (what happens on screen) and the screens before/after. aimForWords is how much fits in the shot; never exceed maxWords.',
-      'Return {"lines": {"<shot id>": "<narration>", ...}} with one entry per shot.'
-    ].join('\n'),
-    JSON.stringify({
-      goal: first.goal, audience: first.audience, site: first.site,
-      shots: contexts.map(({ id, c, seconds }) => ({ id, seconds: Math.round(seconds), aimForWords: Math.round(wordBudget(seconds) * 0.9), maxWords: wordBudget(seconds), title: c.title, isIntro: c.isIntro, isLast: c.isLast, beats: beats(c), screenBefore: c.before, screenAfter: c.after }))
-    })
-  ).catch(() => null);
-  const lines = r && typeof r.lines === 'object' && r.lines ? r.lines as Record<string, unknown> : r || {};
-  for (const { id, seconds } of contexts) {
-    const v = lines[id];
-    if (typeof v === 'string' && v.trim() && words(v) <= Math.ceil(wordBudget(seconds) * 1.5) + 3) out.set(id, tidy(v));
-  }
-  return out;
-}
 
 // ── One line (rewrites, and the no-LLM fallback) ────────────────────────────
 
@@ -106,28 +78,35 @@ const SHOW = [(n: string) => `Here's ${n}.`, (n: string) => `Take a look at ${n}
 const ARRIVE = [(p: string) => `Let's head over to ${p}.`, (p: string) => `Now we're on ${p}.`, (p: string) => `Moving on to ${p}.`, (p: string) => `This is ${p}.`];
 let variant = 0;
 
-/** Deterministic line (no LLM): route clicks become "head over to", other beats get varied phrasings. */
-export function fallbackLine(c: LineContext, maxWords: number): string {
+/** Deterministic beats (no LLM): route clicks become "head over to", other steps get varied phrasings. */
+export function fallbackBeats(c: LineContext, maxWords: number): { stepId: string; text: string }[] {
   const site = c.title.replace(/\.$/, '');
   if (c.isIntro) {
-    if (c.site && maxWords >= 7 + words(c.site)) return `Welcome to ${site}: ${c.site.replace(/\.$/, '')}. Let's take a quick look around.`;
-    return maxWords >= 8 ? `Welcome to ${site}. Let's take a quick look around.` : `Welcome to ${site}.`;
+    const text = c.site && maxWords >= 7 + words(c.site) ? `Welcome to ${site}: ${c.site.replace(/\.$/, '')}. Let's take a quick look around.`
+      : maxWords >= 8 ? `Welcome to ${site}. Let's take a quick look around.` : `Welcome to ${site}.`;
+    return [{ stepId: '', text }];
   }
   const page = (c.after || '').split(/[|·–-]/)[0].trim();
-  const parts: string[] = [];
-  if (c.steps.some(s => s.route || s.op === 'goto') && page) parts.push(ARRIVE[variant++ % ARRIVE.length](page));
+  const parts: { stepId: string; text: string }[] = [];
+  const firstRoute = c.steps.find(s => s.route || s.op === 'goto');
+  if (firstRoute && page) parts.push({ stepId: firstRoute.id, text: ARRIVE[variant++ % ARRIVE.length](page) });
   const name = (s: FlowStep) => /^(form|list of|content|main|nav|section)\b/i.test(s.label) || s.label.includes(':') ? 'this section' : quote(s.label);
   for (const s of c.steps.filter(x => !x.route && x.op !== 'goto')) {
-    if (s.op === 'show') parts.push(SHOW[variant++ % SHOW.length](name(s)));
-    else if (s.op === 'search') parts.push(`Search for ${s.value}.`);
-    else if (s.op === 'open_result') parts.push(`${quote(s.label)} looks like a good fit, so let's open it.`);
-    else if (s.op === 'fill') parts.push(`Enter ${s.value} in ${quote(s.label)}.`);
-    else if (s.op === 'select') parts.push(`Pick an option in ${quote(s.label)}.`);
-    else parts.push(`${s.intent}.`);
+    const text = s.op === 'show' ? SHOW[variant++ % SHOW.length](name(s))
+      : s.op === 'search' ? `Search for ${s.value}.`
+      : s.op === 'open_result' ? `${s.label === s.value ? 'The best match' : quote(s.label)} looks like a good fit, so let's open it.`
+      : s.op === 'fill' ? `Enter ${s.value} in ${quote(s.label)}.`
+      : s.op === 'select' ? `Pick an option in ${quote(s.label)}.`
+      : `${s.intent}.`;
+    parts.push({ stepId: s.id, text });
   }
-  let line = parts.join(' ').replace(/\.\./g, '.');
-  while (words(line) > maxWords && parts.length > 1) { parts.pop(); line = parts.join(' '); }
-  return line || `${c.intent}.`;
+  while (parts.reduce((t, p) => t + words(p.text), 0) > maxWords && parts.length > 1) parts.pop();
+  return parts.length ? parts : [{ stepId: c.steps[0]?.id ?? '', text: `${c.intent}.` }];
+}
+
+/** Deterministic line (no LLM): the fallback beats joined. */
+export function fallbackLine(c: LineContext, maxWords: number): string {
+  return fallbackBeats(c, maxWords).map(b => b.text).join(' ').replace(/\.\./g, '.');
 }
 
 export async function writeLine(c: LineContext, maxWords: number, llm?: TextModel, previous?: string, direction?: 'shorter' | 'longer', style?: string, request?: string): Promise<string> {
@@ -218,18 +197,15 @@ export async function voiceShot(shot: TimelineShot, c: LineContext, preset: Pres
   return notes;
 }
 
-/** Writes the script for all shots in one pass, then voices and fits each shot. */
+/** Voices and fits each shot. Lines come from the script (c.draft) when there is one, else are written per shot. */
 export async function voiceTimeline(tl: Timeline, contexts: Map<string, LineContext>, preset: Preset, runDir: string, deps: VoiceDeps, only?: Set<string>): Promise<string[]> {
   const notes: string[] = [];
   const style = deps.style ?? loadStyle();
-  const todo = tl.shots.filter(s => (!only || only.has(s.shotId)) && contexts.get(s.shotId));
-  const script = await writeScript(todo.map(s => ({ id: s.shotId, c: contexts.get(s.shotId)!, seconds: Math.max(s.segments.reduce((d, g) => d + segDuration(g), 0), contexts.get(s.shotId)!.targetSec || 0) })), { ...deps, style });
   for (const [i, s] of tl.shots.entries()) {
     const c = contexts.get(s.shotId);
     if (!c || (only && !only.has(s.shotId))) continue;
-    c.draft = script.get(s.shotId);
-    c.prevLine = tl.shots[i - 1]?.voice?.line ?? script.get(tl.shots[i - 1]?.shotId ?? '');
-    c.nextLine = script.get(tl.shots[i + 1]?.shotId ?? '');
+    c.prevLine = tl.shots[i - 1]?.voice?.line ?? contexts.get(tl.shots[i - 1]?.shotId ?? '')?.draft;
+    c.nextLine = contexts.get(tl.shots[i + 1]?.shotId ?? '')?.draft;
     notes.push(...await voiceShot(s, c, preset, path.join(runDir, 'voice'), runDir, { ...deps, style }));
   }
   layout(tl);
