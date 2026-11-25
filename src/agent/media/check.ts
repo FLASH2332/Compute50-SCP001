@@ -1,9 +1,17 @@
 import type { AppMap } from '../core/appMap.js';
 import type { Take } from '../record/runner.js';
 import { norm } from '../nav/locate.js';
-import type { Timeline } from './timeline.js';
+import { toOut, type Timeline } from './timeline.js';
 
-export interface Finding { rule: 'silence' | 'voice_fits' | 'label_match' | 'passing_take' | 'repetition'; shotId?: string; message: string }
+export interface Finding { rule: 'silence' | 'voice_fits' | 'label_match' | 'passing_take' | 'repetition' | 'beat_sync' | 'length'; shotId?: string; message: string }
+
+export interface CheckOptions {
+  beats?: Record<string, Record<string, number>>;   // shot → step → when its words start (from the first word)
+  targetSec?: number;                                // the length asked for
+}
+
+const BEAT_TOLERANCE = 0.6;
+const LENGTH_TOLERANCE = 0.1;
 
 const SILENCE = 1.0;
 const FIT_TOLERANCE = 0.3;
@@ -20,8 +28,9 @@ export function quotedNames(line: string): string[] {
  *  - every quoted button/field name matches a label or alias in the graph
  *  - every shot only uses flow steps that have a passing take (A1.12)
  */
-export function checkTimeline(tl: Timeline, takes: Record<string, Take>, map: AppMap): Finding[] {
+export function checkTimeline(tl: Timeline, takes: Record<string, Take>, map: AppMap, opts: CheckOptions = {}): Finding[] {
   const out: Finding[] = [];
+  out.push(...checkTiming(tl, takes, opts));
   const spans = tl.shots.filter(s => s.voice).map(s => ({ id: s.shotId, a: s.outStart + s.voice!.offset, b: s.outStart + s.voice!.offset + s.voice!.duration })).sort((x, y) => x.a - y.a);
   let t = 0;
   let prev = 'start';
@@ -101,5 +110,33 @@ export function repetitionInLines(lines: { id: string; text: string }[]): Findin
     for (const g of mine) if (!grams.has(g)) grams.set(g, id);
     if (problems.length) out.push({ rule: 'repetition', shotId: id, message: problems.join('; ') });
   });
+  return out;
+}
+
+/**
+ * Timing (voice first):
+ *  - beat_sync: each step's click happens in the video within 0.6 s of the words that describe it
+ *  - length: the video is within ±10 % of the length asked for
+ */
+export function checkTiming(tl: Timeline, takes: Record<string, Take>, opts: CheckOptions): Finding[] {
+  const out: Finding[] = [];
+  for (const s of tl.shots) {
+    const beats = opts.beats?.[s.shotId];
+    const take = takes[s.shotId];
+    if (!beats || !take || !s.voice) continue;
+    const late: string[] = [];
+    for (const [stepId, beat] of Object.entries(beats)) {
+      const act = take.events.find(e => e.type === 'act' && e.stepId === stepId);
+      if (!act) continue;
+      const atVideo = toOut(s, act.t) - s.outStart;
+      const atWords = s.voice.offset + beat;
+      const d = atVideo - atWords;
+      if (Math.abs(d) > BEAT_TOLERANCE) late.push(`${stepId} ${d > 0 ? 'after' : 'before'} its words by ${Math.abs(d).toFixed(1)}s`);
+    }
+    if (late.length) out.push({ rule: 'beat_sync', shotId: s.shotId, message: late.join('; ') });
+  }
+  if (opts.targetSec && Math.abs(tl.duration - opts.targetSec) > opts.targetSec * LENGTH_TOLERANCE) {
+    out.push({ rule: 'length', message: `the video is ${tl.duration.toFixed(1)}s; ${opts.targetSec}s was asked (±${LENGTH_TOLERANCE * 100}%)` });
+  }
   return out;
 }

@@ -6,7 +6,7 @@
 import path from 'node:path';
 import type { Speech, Word } from '../core/ports.js';
 import { RESULT, type Script, type ShotScript } from './script.js';
-import { segDuration, type Preset, type Timeline } from './timeline.js';
+import { segDuration, toOut, type Preset, type Segment, type Timeline } from './timeline.js';
 import { tidy, words } from './voice.js';
 
 export interface ShotVoice {
@@ -22,7 +22,9 @@ export interface ShotVoice {
 
 /** Voice starts this long after the shot starts; the shot ends this long after the voice. */
 export const VOICE_OFFSET = 0.25;
-export const VOICE_TAIL = 0.5;
+export const VOICE_TAIL = 0.35;
+/** Words lead their action by this much (must match the recorder's WORDS_LEAD). */
+export const WORDS_LEAD = 0.5;
 
 /** The spoken beats of a shot, with {result} filled in. */
 export function spokenBeats(s: ShotScript, result?: string) {
@@ -86,15 +88,27 @@ export const shotSeconds = (v: ShotVoice) => VOICE_OFFSET + v.duration + VOICE_T
  * Places each shot's voice as recorded: no speeding the picture up. If the footage is shorter than the
  * voice, the last frame holds; a much longer footage is reported (the recorder normally prevents it).
  */
-export function attachVoices(tl: Timeline, voices: Record<string, ShotVoice>): string[] {
+export function attachVoices(tl: Timeline, voices: Record<string, ShotVoice>, lastAct: Record<string, number | undefined> = {}, offsets: Record<string, number | undefined> = {}, firstMove: Record<string, number | undefined> = {}, acts: Record<string, Record<string, number>> = {}): string[] {
   const notes: string[] = [];
   for (const s of tl.shots) {
     const v = voices[s.shotId];
     if (!v) continue;
+    // Quiet footage after the voice is trimmed, but the last action's result stays on screen for a second
+    const act = lastAct[s.shotId];
+    let offset = offsets[s.shotId] ?? VOICE_OFFSET;   // where the recording anchored the voice
+    // Still footage before the cursor first moves is cut, and the voice moves up with it
+    const move = firstMove[s.shotId];
+    if (move !== undefined && offsets[s.shotId] !== undefined) offset = Math.max(0.1, offset - trimHead(s.segments, move - 0.25, offset - 0.1));
+    // Final placement from the edited footage: the voice starts so its beats land WORDS_LEAD before their actions (median over steps)
+    const gaps = Object.entries(acts[s.shotId] ?? {}).filter(([id]) => v.beatTimes[id] !== undefined).map(([id, t]) => toOut(s, t) - s.outStart - v.beatTimes[id] - WORDS_LEAD).sort((a, b) => a - b);
+    if (gaps.length) offset = Math.min(4, Math.max(0.1, gaps[Math.floor((gaps.length - 1) / 2)]));
+    const need = offset + v.duration + VOICE_TAIL;
+    const keep = Math.max(need, act !== undefined ? toOut(s, act) - s.outStart + 1 : 0);
+    trimTail(s.segments, keep);
     const footage = s.segments.reduce((d, g) => d + segDuration(g), 0);
-    s.voice = { line: v.line, file: v.file, duration: v.duration, words: v.words, offset: VOICE_OFFSET, trimStart: v.lead };
-    s.hold = Math.max(0, Math.round((shotSeconds(v) - footage) * 1000) / 1000);
-    if (footage > shotSeconds(v) + 1.5) notes.push(`${s.shotId}: ${(footage - shotSeconds(v)).toFixed(1)}s of footage after the voice ends`);
+    s.voice = { line: v.line, file: v.file, duration: v.duration, words: v.words, offset, trimStart: v.lead };
+    s.hold = Math.max(0, Math.round((need - footage) * 1000) / 1000);
+    if (footage > need + 1.5) notes.push(`${s.shotId}: ${(footage - need).toFixed(1)}s of footage after the voice ends`);
   }
   return notes;
 }
@@ -102,4 +116,32 @@ export function attachVoices(tl: Timeline, voices: Record<string, ShotVoice>): s
 /** What the recorder needs to pace a shot to its voice. */
 export function paceOf(v: ShotVoice, preset: Preset) {
   return { beatTimes: v.beatTimes, voiceSec: v.duration, offset: VOICE_OFFSET, tail: VOICE_TAIL, speed: preset.speed };
+}
+
+/** Shortens a shot's footage to `keep` on-screen seconds by cutting from its end. */
+function trimTail(segs: Segment[], keep: number) {
+  let total = segs.reduce((d, g) => d + segDuration(g), 0);
+  while (segs.length && total - keep > 0.05) {
+    const last = segs[segs.length - 1];
+    const cut = Math.min(total - keep, segDuration(last));
+    if (cut >= segDuration(last) - 0.05 && segs.length > 1) { segs.pop(); total -= segDuration(last); continue; }
+    last.out = Math.round((last.out - cut * last.speed) * 1000) / 1000;
+    total -= cut;
+    break;
+  }
+}
+
+/** Cuts footage from a shot's start up to `until` (source seconds), at most `max` on-screen seconds; returns what was cut. */
+function trimHead(segs: Segment[], until: number, max: number): number {
+  let cut = 0;
+  while (segs.length && max - cut > 0.05) {
+    const first = segs[0];
+    if (until <= first.in) break;
+    const end = Math.min(until, first.out, first.in + (max - cut) * first.speed);
+    cut += (end - first.in) / first.speed;
+    if (end >= first.out - 0.05 && segs.length > 1) { segs.shift(); continue; }
+    first.in = Math.round(end * 1000) / 1000;
+    break;
+  }
+  return cut;
 }

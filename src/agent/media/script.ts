@@ -27,6 +27,7 @@ export const RESULT = '{result}';
 export interface ScriptItem { shotId: string; c: LineContext; seconds: number }
 
 const maxWordsFor = (seconds: number, wps: number) => Math.max(5, Math.floor(Math.max(0, seconds - 0.8) * wps));
+const aimFor = (seconds: number, wps: number) => Math.max(4, Math.round(maxWordsFor(seconds, wps) * 0.85));
 const joinBeats = (beats: BeatText[]) => tidy(beats.map(b => b.text.trim()).filter(Boolean).join(' '));
 
 /** Accepts {"shots": {"shot1": {"beats": [{"step": "st1", "text": "…"}]}}} and the shapes models also return. */
@@ -50,7 +51,7 @@ async function askScript(items: ScriptItem[], wps: number, llm: TextModel, style
       'You write the voice-over script for a screen-recorded product demo, before it is recorded. The recording will be paced to your words.',
       'Follow this style guide exactly:', style,
       'Each shot lists its beats in order: one per step that happens on screen (an "arrive" beat covers the clicks that only get us to a page).',
-      `Write the words spoken during each beat. Keep each shot within maxWords (pace: ${wps} words per second). The words of a beat are said as its step starts.`,
+      `Write the words spoken during each beat. Each shot plays for its seconds while you speak: write close to aimForWords (never more than maxWords, never under 70% of it), or the video has silence. Pace: ${wps} words per second. The words of a beat are said as its step starts.`,
       `For an "open result" beat whose title is not known yet, write ${RESULT} where the title goes (e.g. "${RESULT} looks like a good fit").`,
       fix ? 'Some lines broke the repetition rules: rewrite ONLY the listed shots, keeping their beats.' : '',
       'Return {"shots": {"<shot id>": {"beats": [{"step": "<step id>", "text": "..."}]}}}. Use "" as the step of a shot with no steps.'
@@ -58,7 +59,7 @@ async function askScript(items: ScriptItem[], wps: number, llm: TextModel, style
     JSON.stringify({
       goal: first.goal, audience: first.audience, site: first.site,
       shots: items.filter(i => !fix || fix.problems[i.shotId]).map(({ shotId, c, seconds }) => ({
-        id: shotId, seconds: Math.round(seconds), maxWords: maxWordsFor(seconds, wps), title: c.title, isIntro: c.isIntro, isLast: c.isLast,
+        id: shotId, seconds: Math.round(seconds), aimForWords: aimFor(seconds, wps), maxWords: maxWordsFor(seconds, wps), title: c.title, isIntro: c.isIntro, isLast: c.isLast,
         beats: c.isIntro && !c.steps.length ? [{ step: '', beat: 'welcome' }] : beatList(c), screenBefore: c.before, screenAfter: c.after,
         ...(fix ? { currentLine: fix.lines[shotId], problem: fix.problems[shotId] } : {})
       })),
@@ -96,8 +97,16 @@ export async function writeScript(items: ScriptItem[], opts: { llm?: TextModel; 
     if (opts.llm) notes.push(`script: ${i.shotId} written by rules`);
   }
 
-  // Repetition across the whole script: one rewrite of the offending shots
-  const problems = Object.fromEntries(repetitionInLines(items.map(i => ({ id: i.shotId, text: shots[i.shotId].line }))).map(f => [f.shotId!, f.message]));
+  // Repetition across the whole script, and lines far too short for their shot: one rewrite of those shots
+  const problems: Record<string, string> = Object.fromEntries(repetitionInLines(items.map(i => ({ id: i.shotId, text: shots[i.shotId].line }))).map(f => [f.shotId!, f.message]));
+  for (const i of items) {
+    // One beat per step: a step without words cannot be timed to the voice
+    const expected = allowedOf(i);
+    const missing = [...expected].filter(id => id && !shots[i.shotId].beats.some(b => b.stepId === id));
+    if (expected.size >= 2 && missing.length) problems[i.shotId] = [problems[i.shotId], `steps ${missing.join(', ')} have no words: write one beat per step`].filter(Boolean).join('; ');
+    const aim = aimFor(i.seconds, wps);
+    if (aim >= 8 && words(shots[i.shotId].line) < aim * 0.7) problems[i.shotId] = [problems[i.shotId], `too short for its ${Math.round(i.seconds)}s: write about ${aim} words`].filter(Boolean).join('; ');
+  }
   if (opts.llm && Object.keys(problems).length) {
     const lines = Object.fromEntries(items.map(i => [i.shotId, shots[i.shotId].line]));
     const r = await askScript(items, wps, opts.llm, style, { lines, problems }).catch(() => null);

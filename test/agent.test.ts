@@ -304,6 +304,30 @@ test('voice first: beat times from word timings, leading silence trimmed, voice 
   } finally { fs.rmSync(runDir, { recursive: true, force: true }); }
 });
 
+test('timing checks: a click far from its words and a video off its length are flagged', async () => {
+  const { checkTiming } = await import('../src/agent/media/check.js');
+  const tl = tlWithVoices([['Head to courses. Pick a track.', 6, 4]]);
+  const take = { ok: true, steps: [], events: [{ t: 0.9, type: 'act', stepId: 'a' }, { t: 4.2, type: 'act', stepId: 'b' }] } as unknown as Take;
+  const f = checkTiming(tl, { shot1: take }, { beats: { shot1: { a: 0.6, b: 1.8 } }, targetSec: 10 });
+  assert.ok(!f.some(x => x.message.includes('a ')), 'step a lands 0.05 s after its words');
+  assert.ok(f.some(x => x.rule === 'beat_sync' && /b after its words by 2\.2s/.test(x.message)), JSON.stringify(f));
+  assert.ok(f.some(x => x.rule === 'length' && /6\.0s; 10s/.test(x.message)), JSON.stringify(f));
+});
+
+test('groq pacing: waits for the tokens-per-minute window instead of hitting the limit', async () => {
+  const { TokenBucket, parseReset } = await import('../src/agent/providers/groq.js');
+  assert.equal(parseReset('697ms'), 697);
+  assert.equal(parseReset('1m2.5s'), 62500);
+  let t = 0;
+  const slept: number[] = [];
+  const bucket = new TokenBucket(() => t, async ms => { slept.push(ms); t += ms; });
+  assert.equal(await bucket.take(3000), 0, 'nothing known yet: go');
+  bucket.update({ get: (n: string) => ({ 'x-ratelimit-remaining-tokens': '1500', 'x-ratelimit-reset-tokens': '7.2s' } as Record<string, string>)[n] ?? null });
+  assert.equal(await bucket.take(1000), 0, 'fits in what is left');
+  assert.equal(await bucket.take(1000), 7450, 'does not fit: wait for the reset (+250 ms)');
+  assert.deepEqual(slept, [7450]);
+});
+
 // ── Against the fixture app (section-graph crawler → adapter → agent) ──────
 
 describe('fixture app', () => {

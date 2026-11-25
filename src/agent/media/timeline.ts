@@ -13,7 +13,7 @@ export interface Preset {
 
 export const PRESETS: Record<Preset['name'], Preset> = {
   fast: { name: 'fast', speed: 1.25, zoomDepth: 1.3, holdAfter: 0.4, voiceSpeed: 1.1 },
-  calm: { name: 'calm', speed: 1.0, zoomDepth: 1.6, holdAfter: 1.0, voiceSpeed: 0.95 }
+  calm: { name: 'calm', speed: 1.0, zoomDepth: 1.6, holdAfter: 1.0, voiceSpeed: 0.9 }
 };
 
 export interface Segment { in: number; out: number; speed: number }      // source seconds

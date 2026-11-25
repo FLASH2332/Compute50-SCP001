@@ -80,7 +80,7 @@ export async function showClip(map: AppMap, flow: Flow, services: Services, opts
 
   const { tl } = run.buildTimeline(preset);
   // Synthesized again only if the clip opened a result whose title is now known
-  attachVoices(tl, await run.ensureVoices(preset, ['shot1'], services.speech, services.llm));
+  attachVoices(tl, await run.ensureVoices(preset, ['shot1'], services.speech, services.llm), run.lastActs(), run.voiceOffsets(), run.firstMoves(), run.actTimes());
   layout(tl);
   const r = await renderTimeline(run.dir, tl, { name: 'answer', extras: false });
   run.save();

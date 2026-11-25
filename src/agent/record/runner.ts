@@ -18,6 +18,10 @@ import { settle } from '../util/pageReady.js';
 
 const OVERLAY = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'overlay.js'), 'utf8');
 export const VIDEO = { width: 1280, height: 720 };
+/** Cursor travel + highlight before a click (see the beforeAct hook): the wait ends this early. */
+const CURSOR_LEAD = 0.85;
+/** Words lead their action by this much: the narration says what is about to happen. */
+export const WORDS_LEAD = 0.5;   // measured: finding the control, cursor travel and highlight take ~0.8 s
 
 export type TakeEventType = 'setup_end' | 'shot_start' | 'step_start' | 'located' | 'act' | 'typing_start' | 'typing_end' | 'nav_start' | 'ready' | 'step_end' | 'shot_end' | 'busy' | 'replan' | 'hold_start' | 'hold_end';
 export interface TakeEvent { t: number; type: TakeEventType; stepId?: string; box?: Box; via?: string }
@@ -96,7 +100,10 @@ export async function recordShot(env: RunnerEnv, shot: Shot, attempt = 1): Promi
   const steps = stepIndex(env.flows);
   const results: StepResult[] = [];
   const missing: string[] = [];
-  let current: { step?: FlowStep; op?: string } = {};
+  let current: { step?: FlowStep; op?: string; beatAt?: number } = {};
+  // Voice anchor: where in the shot the voice starts. Set from the first action, so its words land on it.
+  let voiceAt = env.paces?.[shot.id]?.offset ?? 0;
+  let anchored = false;   // beatAt: on-screen time its words start
   let score = 0;
 
   const ctx: NavContext = {
@@ -107,6 +114,12 @@ export async function recordShot(env: RunnerEnv, shot: Shot, attempt = 1): Promi
         ev('located', { stepId: current.step?.id, box: at.box, via: at.via });
         if (at.healed) score += 10;
         if (!current.step) return; // setup moves are cut, keep them quick
+        // Voice first: the control is found; now wait so the cursor moves in time for the click to land on the words
+        const pc = env.paces?.[shot.id];
+        if (pc && current.beatAt !== undefined) {
+          const w = voiceAt + current.beatAt + WORDS_LEAD - CURSOR_LEAD - onScreenTime(events, windowStart, now(), pc.speed);
+          if (w > 0.05) { ev('hold_start', { stepId: current.step.id }); await page.waitForTimeout(Math.min(15, w) * pc.speed * 1000); ev('hold_end', { stepId: current.step.id }); }
+        }
         await page.evaluate(([x, y]) => (window as any).__demo?.cursorTo(x, y), [cx, cy]).catch(() => {});
         await page.evaluate(b => (window as any).__demo?.highlight(b), at.box).catch(() => {});
         await page.mouse.move(cx, cy);
@@ -151,9 +164,13 @@ export async function recordShot(env: RunnerEnv, shot: Shot, attempt = 1): Promi
         const here = (await locateState(page, env.map)).state?.id;
         if (here !== step.from) { ev('replan', { stepId: id }); score += 20; await driveTo(ctx, step.from, id); }
       }
-      if (pace && pace.beatTimes[step.id] !== undefined) {
-        // Picture follows the voice: start the step just before its words (the cursor moves while they are said)
-        const wait = pace.offset + pace.beatTimes[step.id] - 0.3 - onScreenTime(events, windowStart, now(), pace.speed);
+      // Picture follows the voice. Clicks/typing wait inside the act (after the control is found, see beforeAct);
+      // sections, results and page loads start just before their words.
+      const beat = pace?.beatTimes[step.id];
+      const inAct = ['click', 'fill', 'select', 'check', 'search'].includes(step.op);
+      current.beatAt = pace && beat !== undefined && inAct && anchored ? beat : undefined;   // the first action sets the anchor instead
+      if (pace && beat !== undefined && !inAct) {
+        const wait = anchored ? voiceAt + beat - 0.5 - onScreenTime(events, windowStart, now(), pace.speed) : 0;
         if (wait > 0.05) { ev('hold_start', { stepId: id }); await page.waitForTimeout(Math.min(15, wait) * pace.speed * 1000); ev('hold_end', { stepId: id }); }
       }
       const urlBefore = page.url();
@@ -185,14 +202,19 @@ export async function recordShot(env: RunnerEnv, shot: Shot, attempt = 1): Promi
         const landed = (await locateState(page, env.map)).state?.id;
         if (landed !== step.to) throw new TakeFailed(id, `expected to land in ${step.to}, got ${landed ?? 'an unknown state'}`);
       }
-      await hold(page, step, shot, i, windowStart, now, events, ev, res, pace);
+      // The first action with words anchors the voice: its words start where it happened
+      if (pace && !anchored && beat !== undefined) {
+        const act = events.filter(e => e.type === 'act' && e.stepId === id).pop();
+        if (act) { voiceAt = Math.min(3, Math.max(0.1, onScreenTime(events, windowStart, act.t, pace.speed) - beat - WORDS_LEAD)); anchored = true; }
+      }
+      await hold(page, step, shot, i, windowStart, now, events, ev, res, pace ? { ...pace, offset: voiceAt } : undefined);
       await page.evaluate(() => (window as any).__demo?.clear()).catch(() => {});
       res.status = 'pass';
       res.end = now();
       ev('step_end', { stepId: id });
     }
     await page.evaluate(() => (window as any).__demo?.badge('')).catch(() => {});
-    await page.waitForTimeout(900);
+    if (!env.paces?.[shot.id]) await page.waitForTimeout(900);   // paced shots already held until the voice ends
   } catch (err) {
     ok = false;
     error = (err as Error).message.split('\n')[0];
@@ -221,7 +243,7 @@ export async function recordShot(env: RunnerEnv, shot: Shot, attempt = 1): Promi
   fs.rmSync(tmp, { recursive: true, force: true });
   score += (windowEnd - windowStart) * 0.1;
   const labels = results.map(r => r.label).filter((l): l is string => !!l);
-  const take: Take = { shotId: shot.id, attempt, paced: env.paces?.[shot.id], labels: labels.length ? labels : undefined, video: path.relative(env.runDir, dest).replace(/\\/g, '/'), events, steps: results, ok, error, missing: missing.length ? missing : undefined, window: { start: windowStart, end: windowEnd }, score: Math.round(score * 10) / 10, review };
+  const take: Take = { shotId: shot.id, attempt, paced: env.paces?.[shot.id] ? { ...env.paces[shot.id], offset: voiceAt } : undefined, labels: labels.length ? labels : undefined, video: path.relative(env.runDir, dest).replace(/\\/g, '/'), events, steps: results, ok, error, missing: missing.length ? missing : undefined, window: { start: windowStart, end: windowEnd }, score: Math.round(score * 10) / 10, review };
   fs.writeFileSync(dest.replace(/\.webm$/, '.json'), JSON.stringify(take, null, 2));
   return take;
 }
@@ -348,7 +370,7 @@ async function openResult(page: Page, step: FlowStep, ev: Emit, res: StepResult)
 export function onScreenTime(events: TakeEvent[], windowStart: number, nowT: number, speed = 1): number {
   let cut = 0;
   for (const e of events) {
-    if (e.t < windowStart) continue;
+    if (e.t < windowStart || e.t > nowT) continue;
     if (e.type === 'nav_start') { const r = events.find(x => x.type === 'ready' && x.stepId === e.stepId && x.t >= e.t); if (r && r.t - e.t > 0.3) cut += r.t - e.t - 0.3; }
     if (e.type === 'typing_start') { const d = events.find(x => x.type === 'typing_end' && x.stepId === e.stepId && x.t >= e.t); if (d) cut += (d.t - e.t) * (2 / 3); }
   }
