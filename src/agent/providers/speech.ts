@@ -1,18 +1,18 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import type { Speech, SpeechClip, Word } from '../core/ports.js';
+import type { Speech, SpeechClip, SpeechContext, Word } from '../core/ports.js';
 
 /** Caches clips by hash of (provider, voice, speed, text) in the target dir. */
 abstract class CachedSpeech implements Speech {
   protected abstract key: string;
-  protected abstract make(text: string, dir: string, base: string, speed: number): Promise<SpeechClip>;
-  async synthesize(text: string, dir: string, speed = 1): Promise<SpeechClip> {
+  protected abstract make(text: string, dir: string, base: string, speed: number, context?: SpeechContext): Promise<SpeechClip>;
+  async synthesize(text: string, dir: string, speed = 1, context?: SpeechContext): Promise<SpeechClip> {
     fs.mkdirSync(dir, { recursive: true });
-    const base = crypto.createHash('sha256').update([this.key, speed, text].join('|')).digest('hex').slice(0, 16);
+    const base = crypto.createHash('sha256').update([this.key, speed, text, context?.previousText ?? '', context?.nextText ?? ''].join('|')).digest('hex').slice(0, 16);
     const meta = path.join(dir, `${base}.json`);
     if (fs.existsSync(meta)) return JSON.parse(fs.readFileSync(meta, 'utf8'));
-    const clip = await this.make(text, dir, base, speed);
+    const clip = await this.make(text, dir, base, speed, context);
     fs.writeFileSync(meta, JSON.stringify(clip));
     return clip;
   }
@@ -25,11 +25,13 @@ export class ElevenLabsSpeech extends CachedSpeech {
     super();
     this.key = `elevenlabs|${voice}|${model}`;
   }
-  protected async make(text: string, dir: string, base: string, speed: number): Promise<SpeechClip> {
+  protected async make(text: string, dir: string, base: string, speed: number, context?: SpeechContext): Promise<SpeechClip> {
     const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(this.voice)}/with-timestamps?output_format=mp3_44100_128`, {
       method: 'POST',
       headers: { 'xi-api-key': this.apiKey, 'content-type': 'application/json' },
-      body: JSON.stringify({ text, model_id: this.model, voice_settings: { stability: 0.5, similarity_boost: 0.75, speed: Math.max(0.7, Math.min(1.2, speed)) } }),
+      // previous_text / next_text: request stitching, so each shot's clip continues the same delivery
+      body: JSON.stringify({ text, model_id: this.model, voice_settings: { stability: 0.5, similarity_boost: 0.75, speed: Math.max(0.7, Math.min(1.2, speed)) },
+        ...(context?.previousText ? { previous_text: context.previousText.slice(-1000) } : {}), ...(context?.nextText ? { next_text: context.nextText.slice(0, 1000) } : {}) }),
       signal: AbortSignal.timeout(60000)
     });
     if (!res.ok) throw new Error(`ElevenLabs ${res.status}: ${(await res.text()).slice(0, 300)}`);

@@ -20,9 +20,12 @@ export interface VisionModel {
 export interface Word { text: string; start: number; end: number }
 export interface SpeechClip { file: string; duration: number; words: Word[] }
 
+/** The text spoken just before / after a clip, so separately made clips sound like one take (request stitching). */
+export interface SpeechContext { previousText?: string; nextText?: string }
+
 /** Text → audio file (written into `dir`) with word timings. */
 export interface Speech {
-  synthesize(text: string, dir: string, speed: number): Promise<SpeechClip>;
+  synthesize(text: string, dir: string, speed: number, context?: SpeechContext): Promise<SpeechClip>;
 }
 
 /** Human gates. A CLI, a web page or an MCP elicitation can implement this. */

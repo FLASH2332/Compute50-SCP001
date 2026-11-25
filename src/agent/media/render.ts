@@ -105,7 +105,9 @@ export async function renderTimeline(runDir: string, tlIn: Timeline, opts: Rende
   const aLabels: string[] = [];
   voices.forEach((s, j) => {
     const ms = Math.round((s.outStart + s.voice!.offset) * 1000);
-    chains.push(`[${videos.length + j}:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,adelay=${ms}:all=1[a${j}]`);
+    // Leading silence of the TTS clip is cut (atrim), so the first word lands exactly at the voice offset
+    const trim = s.voice!.trimStart ? `atrim=start=${f(s.voice!.trimStart)},asetpts=PTS-STARTPTS,` : '';
+    chains.push(`[${videos.length + j}:a]${trim}aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,adelay=${ms}:all=1[a${j}]`);
     aLabels.push(`[a${j}]`);
   });
   chains.push(`[${nullIdx}:a]${aLabels.join('')}amix=inputs=${aLabels.length + 1}:normalize=0:duration=first[aout]`);

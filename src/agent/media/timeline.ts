@@ -19,7 +19,7 @@ export const PRESETS: Record<Preset['name'], Preset> = {
 export interface Segment { in: number; out: number; speed: number }      // source seconds
 export interface ZoomKey { t: number; until: number; box: Box; depth: number } // source seconds
 export interface Word { text: string; start: number; end: number }       // seconds from clip start
-export interface Voice { line: string; file: string; duration: number; words: Word[]; offset: number }
+export interface Voice { line: string; file: string; duration: number; words: Word[]; offset: number; trimStart?: number }
 
 export interface TimelineShot {
   shotId: string;

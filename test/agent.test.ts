@@ -280,6 +280,30 @@ test('script: written once before recording, one beat per step, repetition fixed
   assert.ok(!/logo/.test(rules.shots.shot2.line), rules.shots.shot2.line);
 });
 
+test('voice first: beat times from word timings, leading silence trimmed, voice attached without speed changes', async () => {
+  const { beatTimesFrom, synthesizeShot, attachVoices, VOICE_OFFSET, VOICE_TAIL } = await import('../src/agent/media/narrate.js');
+  const ws = ['Head', 'to', 'courses.', 'Pick', 'a', 'track.'].map((text, i) => ({ text, start: 0.5 + i * 0.4, end: 0.8 + i * 0.4 }));
+  assert.deepEqual(beatTimesFrom([{ stepId: 'a', text: 'Head to courses.' }, { stepId: 'b', text: 'Pick a track.' }], ws), { a: 0.5, b: 1.7 });
+
+  const runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'voice-first-'));
+  try {
+    // A fake TTS with 0.6 s of leading silence
+    const speech = { async synthesize(text: string) { return { file: 'x.wav', duration: 3, words: text.split(' ').map((w, i) => ({ text: w, start: 0.6 + i * 0.3, end: 0.85 + i * 0.3 })) }; } };
+    const sc = { shotId: 'shot1', by: 'llm' as const, line: '', beats: [{ stepId: 'a', text: 'Head to courses.' }, { stepId: 'b', text: '{result} looks right.' }], dynamic: true };
+    const v = await synthesizeShot(sc, PRESETS.calm, { speech, runDir }, { result: 'Python Basics' });
+    assert.equal(v.line, 'Head to courses. “Python Basics” looks right.');
+    assert.equal(v.lead, 0.6);
+    assert.equal(v.words[0].start, 0);
+    assert.equal(v.beatTimes.b, 0.9, 'beat b starts at its 4th word');
+
+    const tl = layout({ version: 1, style: 'calm', createdAt: '', duration: 0, shots: [{ shotId: 'shot1', title: '', chapter: '', stepIds: [], take: 't', takeAttempt: 1, zooms: [], hold: 0, outStart: 0, outDuration: 0, segments: [{ in: 0, out: 2, speed: 1 }] }] });
+    attachVoices(tl, { shot1: v });
+    assert.equal(tl.shots[0].voice!.trimStart, 0.6);
+    assert.equal(tl.shots[0].segments[0].speed, 1, 'never sped up');
+    assert.ok(Math.abs(tl.shots[0].hold - (VOICE_OFFSET + v.duration + VOICE_TAIL - 2)) < 0.01, 'short footage holds its last frame');
+  } finally { fs.rmSync(runDir, { recursive: true, force: true }); }
+});
+
 // ── Against the fixture app (section-graph crawler → adapter → agent) ──────
 
 describe('fixture app', () => {

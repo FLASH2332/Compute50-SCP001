@@ -12,8 +12,10 @@ import { Gate } from '../nav/gate.js';
 import { modeFor } from '../nav/risk.js';
 import type { Flow } from '../plan/flows.js';
 import { resolveLine, WPS, writeScript, type Script } from '../media/script.js';
+import { attachVoices, shotSeconds, spokenBeats, synthesizeShots, type ShotVoice } from '../media/narrate.js';
+import { tidy } from '../media/voice.js';
 import { words } from '../media/voice.js';
-import type { TextModel } from '../core/ports.js';
+import type { Speech, TextModel } from '../core/ports.js';
 import { planDemo } from '../plan/planner.js';
 import { approveStoryboard, buildStoryboard, type Storyboard } from '../plan/storyboard.js';
 import { AutoApprover } from '../providers/approvers.js';
@@ -52,6 +54,7 @@ export class Run {
   flows: Flow[] = [];
   storyboard?: Storyboard;
   script?: Script;            // the voice-over, written once after approval (script.json)
+  voices: Record<string, Record<string, ShotVoice>> = {};   // style → shot → synthesized voice (voices.json)
   changes: ChangeLog;
 
   constructor(public dir: string) {
@@ -70,6 +73,7 @@ export class Run {
     if (fs.existsSync(r.p('flows.json'))) r.flows = r.read('flows.json');
     if (fs.existsSync(r.p('storyboard.json'))) r.storyboard = r.read('storyboard.json');
     if (fs.existsSync(r.p('script.json'))) r.script = r.read('script.json');
+    if (fs.existsSync(r.p('voices.json'))) r.voices = r.read('voices.json');
     return r;
   }
 
@@ -79,6 +83,7 @@ export class Run {
     this.write('flows.json', this.flows);
     if (this.storyboard) this.write('storyboard.json', this.storyboard);
     if (this.script) this.write('script.json', this.script);
+    if (Object.keys(this.voices).length) this.write('voices.json', this.voices);
   }
 
   /** Writes the voice-over script once (after approval), unless the run already has one. */
@@ -88,6 +93,39 @@ export class Run {
     this.script = await writeScript((this.storyboard?.shots ?? []).map(s => ({ shotId: s.id, c: ctx.get(s.id)!, seconds: s.targetSec })), { llm, wps });
     this.write('script.json', this.script);
     return this.script;
+  }
+
+  /** The title of the result a shot opened (search answers), once it is recorded. */
+  resultOf(shotId: string): string | undefined {
+    const shot = this.storyboard?.shots.find(s => s.id === shotId);
+    const steps = new Map(this.flows.flatMap(f => f.steps).map(st => [st.id, st]));
+    return this.state.takes[shotId]?.steps.filter(r => steps.get(r.stepId)?.op === 'open_result' && shot?.stepIds.includes(r.stepId)).map(r => r.label).filter(Boolean).pop();
+  }
+
+  /**
+   * Voices for these shots in this style, synthesized from the script before recording (voice first).
+   * A shot whose voice runs well past its planned length gets one shorter line. A shot whose result title is
+   * now known (after recording) is synthesized again with the title.
+   */
+  async ensureVoices(preset: Preset, ids: string[], speech: Speech, llm?: TextModel): Promise<Record<string, ShotVoice>> {
+    const script = this.script!;
+    const have = (this.voices[preset.name] ??= {});
+    const results = Object.fromEntries(ids.map(id => [id, this.resultOf(id)]));
+    const spoken = (id: string) => tidy(spokenBeats(script.shots[id], results[id]).map(b => b.text).join(' '));
+    const need = ids.filter(id => script.shots[id] && (!have[id] || have[id].line !== spoken(id)));
+    Object.assign(have, await synthesizeShots(script, need, preset, { speech, runDir: this.dir }, results));
+    const ctx = this.lineContexts();
+    for (const id of need) {
+      const target = this.storyboard?.shots.find(x => x.id === id)?.targetSec ?? 0;
+      if (!llm || !target || shotSeconds(have[id]) <= target * 1.15) continue;
+      const shorter = await writeScript([{ shotId: id, c: ctx.get(id)!, seconds: target }], { llm, wps: script.wps * 0.85 });
+      if (!shorter.shots[id] || words(shorter.shots[id].line) >= words(script.shots[id].line)) continue;
+      script.shots[id] = shorter.shots[id];
+      Object.assign(have, await synthesizeShots(script, [id], preset, { speech, runDir: this.dir }, results));
+      script.notes.push(`${id}: line shortened to fit its ${target}s`);
+    }
+    this.save();
+    return Object.fromEntries(ids.filter(id => have[id]).map(id => [id, have[id]]));
   }
 
   lineContexts(): Map<string, LineContext> {
@@ -256,7 +294,8 @@ export class DemoAgent {
           const samples: { name: Preset['name']; file: string }[] = [];
           for (const p of Object.values(PRESETS)) {
             const { tl } = run.buildTimeline(p, ids);
-            await voiceTimeline(tl, run.lineContexts(), p, run.dir, deps);
+            attachVoices(tl, await run.ensureVoices(p, ids, deps.speech, llm));
+            layout(tl);
             const r = await renderTimeline(run.dir, tl, { name: `sample-${p.name}` });
             samples.push({ name: p.name, file: r.mp4 });
             this.log(`Style sample "${p.name}": ${r.mp4} (${r.duration.toFixed(1)}s)`);
@@ -286,11 +325,13 @@ export class DemoAgent {
         const preset = PRESETS[s.style || 'calm'];
         const { tl, skipped } = run.buildTimeline(preset);
         if (!tl.shots.length) throw new Error('No shot has a passing take; nothing to assemble.');
-        s.notes = await voiceTimeline(tl, run.lineContexts(), preset, run.dir, deps);
+        s.notes = attachVoices(tl, await run.ensureVoices(preset, tl.shots.map(x => x.shotId), deps.speech, llm));
+        layout(tl);
+        s.notes.push(...(run.script?.notes ?? []));
         tl.version = 1;
         let findings = run.review(tl, skipped);
         // One automatic fix round: re-voice shots with timing or label problems
-        const fixable = new Set(findings.filter(f => f.shotId && f.rule !== 'passing_take').map(f => f.shotId!));
+        const fixable = new Set(findings.filter(f => f.shotId && (f.rule === 'label_match' || f.rule === 'repetition')).map(f => f.shotId!));
         if (fixable.size) {
           this.log(`Review found ${findings.length} issue(s); re-voicing ${[...fixable].join(', ')}`);
           const ctx = run.lineContexts();
