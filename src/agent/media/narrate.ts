@@ -98,3 +98,8 @@ export function attachVoices(tl: Timeline, voices: Record<string, ShotVoice>): s
   }
   return notes;
 }
+
+/** What the recorder needs to pace a shot to its voice. */
+export function paceOf(v: ShotVoice, preset: Preset) {
+  return { beatTimes: v.beatTimes, voiceSec: v.duration, offset: VOICE_OFFSET, tail: VOICE_TAIL, speed: preset.speed };
+}

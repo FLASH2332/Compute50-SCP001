@@ -9,8 +9,8 @@ import path from 'node:path';
 import type { AppMap } from '../core/appMap.js';
 import type { Services } from '../core/ports.js';
 import { renderTimeline } from '../media/render.js';
-import { PRESETS } from '../media/timeline.js';
-import { voiceTimeline } from '../media/voice.js';
+import { layout, PRESETS } from '../media/timeline.js';
+import { attachVoices, paceOf } from '../media/narrate.js';
 import { Gate } from '../nav/gate.js';
 import { modeFor } from '../nav/risk.js';
 import { estSeconds, type Flow } from '../plan/flows.js';
@@ -57,12 +57,18 @@ export async function showClip(map: AppMap, flow: Flow, services: Services, opts
     options: { takes: 1, headless: opts.headless ?? true, extras: false, browserChannel: opts.browserChannel, storageState: opts.storageState }
   };
 
+  // Voice first: the answer's line is written and spoken before recording, and the clip is paced to it
+  const preset = PRESETS.calm;
+  await run.ensureScript(services.llm);
+  const voices = await run.ensureVoices(preset, ['shot1'], services.speech, services.llm);
+
   // Answers only browse: no approvals, so the gate lets nothing risky through
   const env: RunnerEnv = {
     runDir: run.dir, map, changes: run.changes, flows: run.flows,
     gate: new Gate(new Set(), new Set(), modeFor(map.startUrl)),
     headless: run.state.options.headless, browserChannel: opts.browserChannel, storageState: opts.storageState,
-    log: services.log, hooks: services.hooks, llm: services.llm, vision: services.vision
+    log: services.log, hooks: services.hooks, llm: services.llm, vision: services.vision,
+    paces: voices.shot1 ? { shot1: paceOf(voices.shot1, preset) } : undefined
   };
   try {
     run.state.takes.shot1 = await recordBest(env, run.storyboard.shots[0], 1);
@@ -72,10 +78,10 @@ export async function showClip(map: AppMap, flow: Flow, services: Services, opts
   const take = run.state.takes.shot1;
   if (!take.ok) throw new Error(`Recording the answer failed: ${take.error || 'a step did not pass'}`);
 
-  const preset = PRESETS.calm;
-  await run.ensureScript(services.llm);
   const { tl } = run.buildTimeline(preset);
-  await voiceTimeline(tl, run.lineContexts(), preset, run.dir, { speech: services.speech, llm: services.llm });
+  // Synthesized again only if the clip opened a result whose title is now known
+  attachVoices(tl, await run.ensureVoices(preset, ['shot1'], services.speech, services.llm));
+  layout(tl);
   const r = await renderTimeline(run.dir, tl, { name: 'answer', extras: false });
   run.save();
   const clip: Clip = { file: r.mp4, duration: r.duration, cached: false, dir };

@@ -12,15 +12,15 @@ import { Gate } from '../nav/gate.js';
 import { modeFor } from '../nav/risk.js';
 import type { Flow } from '../plan/flows.js';
 import { resolveLine, WPS, writeScript, type Script } from '../media/script.js';
-import { attachVoices, shotSeconds, spokenBeats, synthesizeShots, type ShotVoice } from '../media/narrate.js';
+import { attachVoices, paceOf, shotSeconds, spokenBeats, synthesizeShots, type ShotVoice } from '../media/narrate.js';
 import { tidy } from '../media/voice.js';
 import { words } from '../media/voice.js';
 import type { Speech, TextModel } from '../core/ports.js';
 import { planDemo } from '../plan/planner.js';
-import { approveStoryboard, buildStoryboard, type Storyboard } from '../plan/storyboard.js';
+import { approveStoryboard, buildStoryboard, type Shot, type Storyboard } from '../plan/storyboard.js';
 import { AutoApprover } from '../providers/approvers.js';
 import { SilentSpeech } from '../providers/speech.js';
-import { closeRunner, recordBest, type RunnerEnv, type Take } from '../record/runner.js';
+import { closeRunner, recordBest, type RunnerEnv, type ShotPace, type Take } from '../record/runner.js';
 
 export type Phase = 'plan' | 'sample' | 'style' | 'record' | 'assemble' | 'review' | 'done';
 
@@ -42,6 +42,7 @@ export interface RunState {
   style?: Preset['name'];
   version: number;
   takes: Record<string, Take>;
+  sampleTakes?: Record<string, Record<string, Take>>;   // style → opening shot → take (Compare records each style)
   findings: Finding[];
   notes: string[];
   options: RunOptions;
@@ -145,12 +146,12 @@ export class Run {
   }
 
   /** Timeline shots from takes; shots without a passing take are left out (and reported by review). */
-  buildTimeline(preset: Preset, shotIds?: string[]): { tl: Timeline; skipped: string[] } {
+  buildTimeline(preset: Preset, shotIds?: string[], takes: Record<string, Take> = this.state.takes): { tl: Timeline; skipped: string[] } {
     const shots: TimelineShot[] = [];
     const skipped: string[] = [];
     for (const s of this.storyboard!.shots) {
       if (shotIds && !shotIds.includes(s.id)) continue;
-      const take = this.state.takes[s.id];
+      const take = takes[s.id];
       if (!take?.ok) { skipped.push(s.id); continue; }
       const segments = cutSegments(take, preset);
       shots.push({ shotId: s.id, title: s.title, chapter: s.chapter, stepIds: s.stepIds, take: take.video, takeAttempt: take.attempt, segments, zooms: zoomKeys(take, preset, segments), hold: 0, outStart: 0, outDuration: 0 });
@@ -280,20 +281,32 @@ export class DemoAgent {
         run.save();
       }
       const sb = run.storyboard!;
-      const freshEnv = () => Object.assign(env, { gate: this.env(run).gate, flows: run.flows });
+      const freshEnv = (paces?: Record<string, ShotPace>) => Object.assign(env, { gate: this.env(run).gate, flows: run.flows, paces });
+      /** Voice first: synthesize the shots' voices in this style, then record each shot paced to its voice. */
+      const recordPaced = async (p: Preset, list: Shot[], into: Record<string, Take>) => {
+        const voices = await run.ensureVoices(p, list.map(x => x.id), deps.speech, llm);
+        const paces = Object.fromEntries(Object.entries(voices).map(([id, v]) => [id, paceOf(v, p)]));
+        for (const shot of list) {
+          this.log(`Recording ${shot.id} (${shot.title})${voices[shot.id] ? `, paced to ${voices[shot.id].duration.toFixed(1)}s of voice` : ''}`);
+          into[shot.id] = await recordBest(freshEnv(paces), shot, s.options.takes);
+          run.save();
+        }
+      };
       const deps = { speech: this.services.speech, llm };
 
       if (s.phase === 'sample') {
         const opening = sb.shots.slice(0, 2);
-        for (const shot of opening) {
-          this.log(`Recording ${shot.id} (${shot.title})`);
-          s.takes[shot.id] = await recordBest(freshEnv(), shot, s.options.takes);
+        if (s.style) await recordPaced(PRESETS[s.style], opening, s.takes);
+        else {
+          // Compare: each style has its own voice timing, so the opening shots are recorded once per style
+          s.sampleTakes = {};
+          for (const p of Object.values(PRESETS)) await recordPaced(p, opening, (s.sampleTakes[p.name] = {}));
         }
-        const ids = opening.filter(x => s.takes[x.id]?.ok).map(x => x.id);
+        const ids = opening.filter(x => (s.sampleTakes?.calm ?? s.takes)[x.id]?.ok).map(x => x.id);
         if (!s.style && ids.length) {
           const samples: { name: Preset['name']; file: string }[] = [];
           for (const p of Object.values(PRESETS)) {
-            const { tl } = run.buildTimeline(p, ids);
+            const { tl } = run.buildTimeline(p, ids, s.sampleTakes![p.name]);
             attachVoices(tl, await run.ensureVoices(p, ids, deps.speech, llm));
             layout(tl);
             const r = await renderTimeline(run.dir, tl, { name: `sample-${p.name}` });
@@ -302,6 +315,8 @@ export class DemoAgent {
           }
           s.style = await approver.style(samples);
         }
+        // The chosen style's takes of the opening shots are kept
+        if (s.sampleTakes) Object.assign(s.takes, s.sampleTakes[s.style ?? 'calm'] ?? {});
         s.phase = 'style';
         run.save();
       }
@@ -312,12 +327,7 @@ export class DemoAgent {
         run.save();
       }
       if (s.phase === 'record') {
-        for (const shot of sb.shots) {
-          if (s.takes[shot.id]?.ok) continue;
-          this.log(`Recording ${shot.id} (${shot.title})`);
-          s.takes[shot.id] = await recordBest(freshEnv(), shot, s.options.takes);
-          run.save();
-        }
+        await recordPaced(PRESETS[s.style ?? 'calm'], sb.shots.filter(x => !s.takes[x.id]?.ok), s.takes);
         s.phase = 'assemble';
         run.save();
       }
