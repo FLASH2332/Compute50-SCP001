@@ -57,7 +57,7 @@ export async function showClip(map: AppMap, flow: Flow, services: Services, opts
     options: { takes: 1, headless: opts.headless ?? true, extras: false, browserChannel: opts.browserChannel, storageState: opts.storageState }
   };
 
-  // Voice first: the answer's line is written and spoken before recording, and the clip is paced to it
+  // Voice first: the answer's line is written and spoken before recording, and the clip is edited to it
   const preset = PRESETS.calm;
   await run.ensureScript(services.llm);
   const voices = await run.ensureVoices(preset, ['shot1'], services.speech, services.llm);
@@ -80,7 +80,7 @@ export async function showClip(map: AppMap, flow: Flow, services: Services, opts
 
   const { tl } = run.buildTimeline(preset);
   // Synthesized again only if the clip opened a result whose title is now known
-  attachVoices(tl, await run.ensureVoices(preset, ['shot1'], services.speech, services.llm), run.lastActs(), run.voiceOffsets(), run.firstMoves(), run.actTimes());
+  attachVoices(tl, await run.ensureVoices(preset, ['shot1'], services.speech, services.llm), run.state.takes);
   layout(tl);
   const r = await renderTimeline(run.dir, tl, { name: 'answer', extras: false });
   run.save();

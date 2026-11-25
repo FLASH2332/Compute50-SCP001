@@ -96,26 +96,6 @@ export class Run {
     return this.script;
   }
 
-  /** When each shot's last action happened (source seconds in its take), so assembly keeps its result on screen. */
-  /** Where each take anchored its voice (voice first). */
-  voiceOffsets(takes: Record<string, Take> = this.state.takes): Record<string, number | undefined> {
-    return Object.fromEntries(Object.entries(takes).map(([id, t]) => [id, t.paced?.offset]));
-  }
-
-  /** When each take's cursor first moves (source seconds): still footage before it is trimmed. */
-  firstMoves(takes: Record<string, Take> = this.state.takes): Record<string, number | undefined> {
-    return Object.fromEntries(Object.entries(takes).map(([id, t]) => [id, t.events.find(e => e.type === 'located' && e.stepId && e.t >= t.window.start)?.t]));
-  }
-
-  /** When each step's action happened in each take (source seconds). */
-  actTimes(takes: Record<string, Take> = this.state.takes): Record<string, Record<string, number>> {
-    return Object.fromEntries(Object.entries(takes).map(([id, t]) => [id, Object.fromEntries(t.events.filter(e => e.type === 'act' && e.stepId).map(e => [e.stepId!, e.t]))]));
-  }
-
-  lastActs(takes: Record<string, Take> = this.state.takes): Record<string, number | undefined> {
-    return Object.fromEntries(Object.entries(takes).map(([id, t]) => [id, t.events.filter(e => e.type === 'act').map(e => e.t).pop()]));
-  }
-
   /** The title of the result a shot opened (search answers), once it is recorded. */
   resultOf(shotId: string): string | undefined {
     const shot = this.storyboard?.shots.find(s => s.id === shotId);
@@ -187,7 +167,7 @@ export class Run {
   }
 
   review(tl: Timeline, skipped: string[]): Finding[] {
-    // Timing is checked against the voices the shots were paced to
+    // Timing is checked against the voices the shots were fitted to
     const voices = this.voices[tl.style] ?? {};
     const f = checkTimeline(tl, this.state.takes, this.map, { beats: Object.fromEntries(Object.entries(voices).map(([id, v]) => [id, v.beatTimes])), targetSec: this.state.seconds });
     for (const id of skipped) {
@@ -336,7 +316,7 @@ export class DemoAgent {
           const samples: { name: Preset['name']; file: string }[] = [];
           for (const p of Object.values(PRESETS)) {
             const { tl } = run.buildTimeline(p, ids, s.sampleTakes![p.name]);
-            attachVoices(tl, await run.ensureVoices(p, ids, deps.speech, llm), run.lastActs(s.sampleTakes![p.name]), run.voiceOffsets(s.sampleTakes![p.name]), run.firstMoves(s.sampleTakes![p.name]), run.actTimes(s.sampleTakes![p.name]));
+            attachVoices(tl, await run.ensureVoices(p, ids, deps.speech, llm), s.sampleTakes![p.name]);
             layout(tl);
             const r = await renderTimeline(run.dir, tl, { name: `sample-${p.name}` });
             samples.push({ name: p.name, file: r.mp4 });
@@ -364,7 +344,7 @@ export class DemoAgent {
         const preset = PRESETS[s.style || 'calm'];
         const { tl, skipped } = run.buildTimeline(preset);
         if (!tl.shots.length) throw new Error('No shot has a passing take; nothing to assemble.');
-        s.notes = attachVoices(tl, await run.ensureVoices(preset, tl.shots.map(x => x.shotId), deps.speech, llm), run.lastActs(), run.voiceOffsets(), run.firstMoves(), run.actTimes());
+        s.notes = attachVoices(tl, await run.ensureVoices(preset, tl.shots.map(x => x.shotId), deps.speech, llm), s.takes);
         layout(tl);
         s.notes.push(...(run.script?.notes ?? []));
         tl.version = 1;

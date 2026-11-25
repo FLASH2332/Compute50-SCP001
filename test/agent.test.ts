@@ -15,7 +15,7 @@ import { driveTo, performAction } from '../src/agent/nav/navigator.js';
 import { isSearchInput, modeFor, riskOf } from '../src/agent/nav/risk.js';
 import { candidateFlows, findFlows } from '../src/agent/plan/flows.js';
 import { buildStoryboard } from '../src/agent/plan/storyboard.js';
-import { closeRunner, recordShot, type Take } from '../src/agent/record/runner.js';
+import { closeRunner, recordShot, type Take, type TakeEvent } from '../src/agent/record/runner.js';
 import { buildCues } from '../src/agent/media/captions.js';
 import { checkRepetition, checkTimeline } from '../src/agent/media/check.js';
 import { fallbackLine } from '../src/agent/media/voice.js';
@@ -307,11 +307,33 @@ test('voice first: beat times from word timings, leading silence trimmed, voice 
 test('timing checks: a click far from its words and a video off its length are flagged', async () => {
   const { checkTiming } = await import('../src/agent/media/check.js');
   const tl = tlWithVoices([['Head to courses. Pick a track.', 6, 4]]);
-  const take = { ok: true, steps: [], events: [{ t: 0.9, type: 'act', stepId: 'a' }, { t: 4.2, type: 'act', stepId: 'b' }] } as unknown as Take;
+  const take = { ok: true, steps: [], events: [{ t: 1.4, type: 'act', stepId: 'a' }, { t: 4.2, type: 'act', stepId: 'b' }] } as unknown as Take;
   const f = checkTiming(tl, { shot1: take }, { beats: { shot1: { a: 0.6, b: 1.8 } }, targetSec: 10 });
-  assert.ok(!f.some(x => x.message.includes('a ')), 'step a lands 0.05 s after its words');
-  assert.ok(f.some(x => x.rule === 'beat_sync' && /b after its words by 2\.2s/.test(x.message)), JSON.stringify(f));
+  assert.ok(!f.some(x => x.message.includes('a ')), 'step a lands just after its words start');
+  assert.ok(f.some(x => x.rule === 'beat_sync' && /b after its words by 1\.7s/.test(x.message)), JSON.stringify(f));
   assert.ok(f.some(x => x.rule === 'length' && /6\.0s; 10s/.test(x.message)), JSON.stringify(f));
+});
+
+test('freeze-sync: each action lands on its words; short footage freezes, long footage is cut then sped up', async () => {
+  const { fitToVoice, VOICE_OFFSET, WORDS_LEAD, VOICE_TAIL } = await import('../src/agent/media/narrate.js');
+  const { toOut } = await import('../src/agent/media/timeline.js');
+  const v = { shotId: 'shot1', preset: 'calm' as const, line: '', file: '', lead: 0, duration: 9, words: [], beatTimes: { a: 0, b: 2, c: 7 } };
+  // a: the click comes early (needs a freeze); b: 6 s later with 3 s of still footage (cut); c: 2 s later (freeze)
+  const events = [
+    { t: 0, type: 'shot_start' }, { t: 0.2, type: 'located', stepId: 'a' }, { t: 0.5, type: 'act', stepId: 'a' },
+    { t: 0.6, type: 'hold_start', stepId: 'a' }, { t: 4, type: 'hold_end', stepId: 'a' },
+    { t: 4, type: 'step_start', stepId: 'b' }, { t: 6, type: 'located', stepId: 'b' }, { t: 6.5, type: 'act', stepId: 'b' },
+    { t: 8, type: 'step_start', stepId: 'c' }, { t: 8.2, type: 'located', stepId: 'c' }, { t: 8.5, type: 'act', stepId: 'c' }
+  ] as TakeEvent[];
+  const shot = { shotId: 'shot1', title: '', chapter: '', stepIds: ['a', 'b', 'c'], take: 't', takeAttempt: 1, zooms: [], hold: 0, outStart: 0, outDuration: 0, segments: [{ in: 0, out: 10, speed: 1 }] };
+  const drift = fitToVoice(shot, v, events);
+  assert.deepEqual(drift, []);
+  for (const [id, t] of [['a', 0.5], ['b', 6.5], ['c', 8.5]] as const)
+    assert.ok(Math.abs(toOut(shot, t) - (VOICE_OFFSET + v.beatTimes[id] + WORDS_LEAD)) < 0.05, `${id} at ${toOut(shot, t)}`);
+  assert.ok(shot.segments.every(g => g.speed === 1), 'cutting still footage was enough');
+  assert.ok(shot.segments.some(g => g.hold && g.in === 0), 'step a freezes before the cursor moves');
+  const total = shot.segments.reduce((d, g) => d + (g.hold ?? 0) + (g.out - g.in) / g.speed, 0) + shot.hold;
+  assert.ok(Math.abs(total - (VOICE_OFFSET + v.duration + VOICE_TAIL)) < 0.05, `shot lasts as long as its voice: ${total}`);
 });
 
 test('groq pacing: waits for the tokens-per-minute window instead of hitting the limit', async () => {

@@ -49,6 +49,7 @@ function segmentChain(input: number, shot: TimelineShot, g: Segment, last: boole
   const zx = zoomExpr(shot.zooms, g.in, g.out);
   if (zx) parts.push(`zoompan=z='${zx.z}':x='${zx.x}':y='${zx.y}':d=1:s=${ZOOM.frameW}x${ZOOM.frameH}:fps=${FPS}`);
   parts.push(`setpts=(PTS-STARTPTS)/${f(g.speed)}`);
+  if (g.hold && g.hold > 0) parts.push(`tpad=start_mode=clone:start_duration=${f(g.hold)}`);   // freeze-sync: wait for the words
   if (last && shot.hold > 0) parts.push(`tpad=stop_mode=clone:stop_duration=${f(shot.hold)}`);
   return parts.join(',') + `[${label}]`;
 }

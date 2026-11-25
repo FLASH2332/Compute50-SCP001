@@ -1,6 +1,7 @@
 import type { AppMap } from '../core/appMap.js';
 import type { Take } from '../record/runner.js';
 import { norm } from '../nav/locate.js';
+import { WORDS_LEAD } from './narrate.js';
 import { toOut, type Timeline } from './timeline.js';
 
 export interface Finding { rule: 'silence' | 'voice_fits' | 'label_match' | 'passing_take' | 'repetition' | 'beat_sync' | 'length'; shotId?: string; message: string }
@@ -129,7 +130,7 @@ export function checkTiming(tl: Timeline, takes: Record<string, Take>, opts: Che
       const act = take.events.find(e => e.type === 'act' && e.stepId === stepId);
       if (!act) continue;
       const atVideo = toOut(s, act.t) - s.outStart;
-      const atWords = s.voice.offset + beat;
+      const atWords = s.voice.offset + beat + WORDS_LEAD;   // the action is due just after its words start
       const d = atVideo - atWords;
       if (Math.abs(d) > BEAT_TOLERANCE) late.push(`${stepId} ${d > 0 ? 'after' : 'before'} its words by ${Math.abs(d).toFixed(1)}s`);
     }

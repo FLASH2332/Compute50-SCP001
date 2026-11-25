@@ -16,7 +16,8 @@ export const PRESETS: Record<Preset['name'], Preset> = {
   calm: { name: 'calm', speed: 1.0, zoomDepth: 1.6, holdAfter: 1.0, voiceSpeed: 0.9 }
 };
 
-export interface Segment { in: number; out: number; speed: number }      // source seconds
+/** Source seconds; `hold` freezes the segment's first frame this long before it plays (freeze-sync). */
+export interface Segment { in: number; out: number; speed: number; hold?: number }
 export interface ZoomKey { t: number; until: number; box: Box; depth: number } // source seconds
 export interface Word { text: string; start: number; end: number }       // seconds from clip start
 export interface Voice { line: string; file: string; duration: number; words: Word[]; offset: number; trimStart?: number }
@@ -115,7 +116,7 @@ export function zoomKeys(take: Take, preset: Preset, segs: Segment[]): ZoomKey[]
   return keys;
 }
 
-export const segDuration = (s: Segment) => (s.out - s.in) / s.speed;
+export const segDuration = (s: Segment) => (s.hold ?? 0) + (s.out - s.in) / s.speed;
 
 /** Recomputes output start/duration of every shot. */
 export function layout(tl: Timeline): Timeline {
@@ -134,7 +135,7 @@ export function toOut(shot: TimelineShot, t: number): number {
   let out = shot.outStart;
   for (const g of shot.segments) {
     if (t <= g.in) break;
-    out += (Math.min(t, g.out) - g.in) / g.speed;
+    out += (g.hold ?? 0) + (Math.min(t, g.out) - g.in) / g.speed;
   }
   return out;
 }

@@ -18,10 +18,6 @@ import { settle } from '../util/pageReady.js';
 
 const OVERLAY = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'overlay.js'), 'utf8');
 export const VIDEO = { width: 1280, height: 720 };
-/** Cursor travel + highlight before a click (see the beforeAct hook): the wait ends this early. */
-const CURSOR_LEAD = 0.85;
-/** Words lead their action by this much: the narration says what is about to happen. */
-export const WORDS_LEAD = 0.5;   // measured: finding the control, cursor travel and highlight take ~0.8 s
 
 export type TakeEventType = 'setup_end' | 'shot_start' | 'step_start' | 'located' | 'act' | 'typing_start' | 'typing_end' | 'nav_start' | 'ready' | 'step_end' | 'shot_end' | 'busy' | 'replan' | 'hold_start' | 'hold_end';
 export interface TakeEvent { t: number; type: TakeEventType; stepId?: string; box?: Box; via?: string }
@@ -41,7 +37,6 @@ export interface Take {
   score: number;             // lower is cleaner
   review?: string;           // A2.6 vision verdict
   labels?: string[];         // names shown on screen that came from the live page (results, sections)
-  paced?: ShotPace;          // the voice this take was paced to (checked by beat_sync)
 }
 
 export interface RunnerEnv {
@@ -59,11 +54,11 @@ export interface RunnerEnv {
   hooks?: BrowserHooks;
   llm?: TextModel;
   vision?: VisionModel;
-  /** Voice-first pacing per shot: each step waits for its words (picture follows the voice). */
+  /** Voice first: each step holds at least as long as its words, so the edit has footage to fit to them. */
   paces?: Record<string, ShotPace>;
 }
 
-/** The voice a shot is paced to, in on-screen seconds from the shot's start. */
+/** A shot's voice, in on-screen seconds (assembly fits the footage to it exactly). */
 export interface ShotPace {
   beatTimes: Record<string, number>;  // step id → when its words start, from the first word
   voiceSec: number;                   // first word to last word
@@ -100,10 +95,7 @@ export async function recordShot(env: RunnerEnv, shot: Shot, attempt = 1): Promi
   const steps = stepIndex(env.flows);
   const results: StepResult[] = [];
   const missing: string[] = [];
-  let current: { step?: FlowStep; op?: string; beatAt?: number } = {};
-  // Voice anchor: where in the shot the voice starts. Set from the first action, so its words land on it.
-  let voiceAt = env.paces?.[shot.id]?.offset ?? 0;
-  let anchored = false;   // beatAt: on-screen time its words start
+  let current: { step?: FlowStep; op?: string } = {};
   let score = 0;
 
   const ctx: NavContext = {
@@ -114,12 +106,6 @@ export async function recordShot(env: RunnerEnv, shot: Shot, attempt = 1): Promi
         ev('located', { stepId: current.step?.id, box: at.box, via: at.via });
         if (at.healed) score += 10;
         if (!current.step) return; // setup moves are cut, keep them quick
-        // Voice first: the control is found; now wait so the cursor moves in time for the click to land on the words
-        const pc = env.paces?.[shot.id];
-        if (pc && current.beatAt !== undefined) {
-          const w = voiceAt + current.beatAt + WORDS_LEAD - CURSOR_LEAD - onScreenTime(events, windowStart, now(), pc.speed);
-          if (w > 0.05) { ev('hold_start', { stepId: current.step.id }); await page.waitForTimeout(Math.min(15, w) * pc.speed * 1000); ev('hold_end', { stepId: current.step.id }); }
-        }
         await page.evaluate(([x, y]) => (window as any).__demo?.cursorTo(x, y), [cx, cy]).catch(() => {});
         await page.evaluate(b => (window as any).__demo?.highlight(b), at.box).catch(() => {});
         await page.mouse.move(cx, cy);
@@ -164,15 +150,6 @@ export async function recordShot(env: RunnerEnv, shot: Shot, attempt = 1): Promi
         const here = (await locateState(page, env.map)).state?.id;
         if (here !== step.from) { ev('replan', { stepId: id }); score += 20; await driveTo(ctx, step.from, id); }
       }
-      // Picture follows the voice. Clicks/typing wait inside the act (after the control is found, see beforeAct);
-      // sections, results and page loads start just before their words.
-      const beat = pace?.beatTimes[step.id];
-      const inAct = ['click', 'fill', 'select', 'check', 'search'].includes(step.op);
-      current.beatAt = pace && beat !== undefined && inAct && anchored ? beat : undefined;   // the first action sets the anchor instead
-      if (pace && beat !== undefined && !inAct) {
-        const wait = anchored ? voiceAt + beat - 0.5 - onScreenTime(events, windowStart, now(), pace.speed) : 0;
-        if (wait > 0.05) { ev('hold_start', { stepId: id }); await page.waitForTimeout(Math.min(15, wait) * pace.speed * 1000); ev('hold_end', { stepId: id }); }
-      }
       const urlBefore = page.url();
       try {
         if (step.op === 'show') await showSection(page, env, step, ev, res);
@@ -202,19 +179,14 @@ export async function recordShot(env: RunnerEnv, shot: Shot, attempt = 1): Promi
         const landed = (await locateState(page, env.map)).state?.id;
         if (landed !== step.to) throw new TakeFailed(id, `expected to land in ${step.to}, got ${landed ?? 'an unknown state'}`);
       }
-      // The first action with words anchors the voice: its words start where it happened
-      if (pace && !anchored && beat !== undefined) {
-        const act = events.filter(e => e.type === 'act' && e.stepId === id).pop();
-        if (act) { voiceAt = Math.min(3, Math.max(0.1, onScreenTime(events, windowStart, act.t, pace.speed) - beat - WORDS_LEAD)); anchored = true; }
-      }
-      await hold(page, step, shot, i, windowStart, now, events, ev, res, pace ? { ...pace, offset: voiceAt } : undefined);
+      await hold(page, step, shot, i, windowStart, now, events, ev, res, pace);
       await page.evaluate(() => (window as any).__demo?.clear()).catch(() => {});
       res.status = 'pass';
       res.end = now();
       ev('step_end', { stepId: id });
     }
     await page.evaluate(() => (window as any).__demo?.badge('')).catch(() => {});
-    if (!env.paces?.[shot.id]) await page.waitForTimeout(900);   // paced shots already held until the voice ends
+    if (!env.paces?.[shot.id]) await page.waitForTimeout(900);   // voiced shots already held through their last words
   } catch (err) {
     ok = false;
     error = (err as Error).message.split('\n')[0];
@@ -243,7 +215,7 @@ export async function recordShot(env: RunnerEnv, shot: Shot, attempt = 1): Promi
   fs.rmSync(tmp, { recursive: true, force: true });
   score += (windowEnd - windowStart) * 0.1;
   const labels = results.map(r => r.label).filter((l): l is string => !!l);
-  const take: Take = { shotId: shot.id, attempt, paced: env.paces?.[shot.id] ? { ...env.paces[shot.id], offset: voiceAt } : undefined, labels: labels.length ? labels : undefined, video: path.relative(env.runDir, dest).replace(/\\/g, '/'), events, steps: results, ok, error, missing: missing.length ? missing : undefined, window: { start: windowStart, end: windowEnd }, score: Math.round(score * 10) / 10, review };
+  const take: Take = { shotId: shot.id, attempt, labels: labels.length ? labels : undefined, video: path.relative(env.runDir, dest).replace(/\\/g, '/'), events, steps: results, ok, error, missing: missing.length ? missing : undefined, window: { start: windowStart, end: windowEnd }, score: Math.round(score * 10) / 10, review };
   fs.writeFileSync(dest.replace(/\.webm$/, '.json'), JSON.stringify(take, null, 2));
   return take;
 }
@@ -378,17 +350,16 @@ export function onScreenTime(events: TakeEvent[], windowStart: number, nowT: num
 }
 
 /**
- * Holds after a step. With a voice (voice first): a short pause, and after the last step until the voice
- * ends; the next step's own wait lines it up with its words. Without one: until the shot's on-screen time
- * reaches its share of the planned length. Holds are marked so the cutter keeps them; while holding on a
- * section or a new page, scroll gently through it.
+ * Holds after a step. With a voice: as long as the step's words (to the next step's words; after the last
+ * step, until the voice ends). Extra footage is fine: assembly cuts the still part of holds and fits each step
+ * to its words. Without one: until the shot's on-screen time reaches its share of the planned length. Holds are
+ * marked so the cutter keeps them; while holding on a section or a new page, scroll gently through it.
  */
 async function hold(page: Page, step: FlowStep, shot: Shot, i: number, windowStart: number, now: () => number, events: TakeEvent[], ev: Emit, res: StepResult, pace?: ShotPace) {
   const n = shot.stepIds.length;
   const speed = pace?.speed ?? 1;
   const onScreen = onScreenTime(events, windowStart, now(), speed);
-  const due = pace ? (i === n - 1 ? pace.offset + pace.voiceSec + pace.tail : onScreen + 0.4) : (shot.targetSec * (i + 1)) / n;
-  const wait = Math.max(pace ? 0.3 : 0.6, Math.min(14, due - onScreen)) * speed;
+  const wait = pace ? Math.min(14, Math.max(0.6, wordsOf(pace, shot, i))) * speed : Math.max(0.6, Math.min(14, (shot.targetSec * (i + 1)) / n - onScreen)) * speed;
   ev('hold_start', { stepId: step.id });
   const browsing = step.op === 'show' || step.op === 'goto' || step.op === 'open_result' || step.op === 'search' || (res.url !== undefined);
   if (browsing && wait > 2.5) {
@@ -403,4 +374,12 @@ async function hold(page: Page, step: FlowStep, shot: Shot, i: number, windowSta
     await page.waitForTimeout(wait * 1000);
   }
   ev('hold_end', { stepId: step.id });
+}
+
+/** How long step i's words last: from its beat to the next step's beat, or to the end of the voice. */
+function wordsOf(pace: ShotPace, shot: Shot, i: number): number {
+  const beat = pace.beatTimes[shot.stepIds[i]];
+  if (beat === undefined) return 0;
+  const next = shot.stepIds.slice(i + 1).map(id => pace.beatTimes[id]).find(b => b !== undefined);
+  return (next ?? pace.voiceSec + pace.tail) - beat;
 }
