@@ -31,7 +31,8 @@ export const WORDS_LEAD = 0.5;
 /** The spoken beats of a shot, with {result} filled in. */
 export function spokenBeats(s: ShotScript, result?: string) {
   const title = result ? `“${result.replace(/[“”"]/g, '')}”` : 'the best match';
-  return s.beats.map(b => ({ stepId: b.stepId, text: tidy(b.text.split(RESULT).join(title)) })).filter(b => b.text);
+  // Each beat is a sentence: one without an ending gets a full stop, so the voice pauses and the caption reads right
+  return s.beats.map(b => ({ stepId: b.stepId, text: tidy(b.text.split(RESULT).join(title)).replace(/([^.!?…:;,])$/, '$1.') })).filter(b => b.text);
 }
 
 /** Beat start times from word timings: each beat starts at its first word (by word count). */
