@@ -11,7 +11,8 @@
     "build": "tsc",
     "test": "tsx --test test/*.test.ts",
     "agent": "tsx src/agent/cli.ts",
-    "fixture": "tsx src/agent/util/staticServer.ts test-site 5050"
+    "fixture": "tsx src/agent/util/staticServer.ts test-site 5050",
+    "onboard": "tsx src/agent/onboard/cli.ts"
   },
   "dependencies": {
     "cors": "^2.8.5",

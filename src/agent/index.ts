@@ -17,6 +17,8 @@ export { AutoApprover, CliApprover } from './providers/approvers.js';
 export { ElevenLabsSpeech, SilentSpeech, speechFromEnv } from './providers/speech.js';
 export { GroqText, GroqVision, groqFromEnv } from './providers/groq.js';
 export type { Finding } from './media/check.js';
+export { OnboardingAgent, createOnboardingAgent, type AskInput, type AskResult, type OnboardingConfig } from './onboard/agent.js';
+export { NOT_FOUND } from './onboard/understand.js';
 
 import type { Services } from './core/ports.js';
 import { groqFromEnv } from './providers/groq.js';

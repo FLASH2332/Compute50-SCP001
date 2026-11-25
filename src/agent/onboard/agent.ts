@@ -1,0 +1,118 @@
+/**
+ * The onboarding agent: Understand → Show → Answer.
+ *
+ * Like the demo agent it depends only on the AppMap and the ports in
+ * core/ports.ts, so it reads any graph an adapter can produce: a saved map
+ * in Memgraph / Neo4j (MapStore), a section graph file, or a fresh crawl
+ * (MapSource). It never invents steps: no route in the map means
+ * "I can't find that in this app", and the question is logged.
+ */
+import fs from 'node:fs';
+import path from 'node:path';
+import { AppMap } from '../core/appMap.js';
+import type { MapSource, Services } from '../core/ports.js';
+import { classifyRisk, exploreInteractions, linkEdges } from '../explore/interact.js';
+import { SilentSpeech } from '../providers/speech.js';
+import { AutoApprover } from '../providers/approvers.js';
+import { answerSteps, flowFromRoute } from './answer.js';
+import { showClip, type Clip } from './show.js';
+import { NOT_FOUND, understand } from './understand.js';
+
+export interface OnboardingConfig {
+  services?: Partial<Services>;
+  runsDir?: string;
+  headless?: boolean;
+  browserChannel?: string;
+  storageState?: string;
+}
+
+export interface AskInput {
+  question: string;
+  /** The site. With a store, its saved map is used when there is one. */
+  url?: string;
+  /** A ready AppMap, or a source that builds one when the store has none. */
+  map?: AppMap | MapSource;
+  rebuild?: boolean;
+  deepen?: boolean;      // run the safe-click explorer on a freshly built map (slower)
+  clip?: boolean;        // record a clip (default true)
+}
+
+export interface AskResult {
+  found: boolean;
+  steps: string[];       // numbered steps, or [NOT_FOUND]
+  clip?: Clip;
+  reason: string;
+  by: string;            // 'model' or 'keyword rules'
+  source: string;        // which graph the answer came from (adapter name)
+  clipError?: string;
+}
+
+export class OnboardingAgent {
+  readonly services: Services;
+  readonly runsDir: string;
+
+  constructor(private cfg: OnboardingConfig = {}) {
+    const s = cfg.services || {};
+    this.services = { speech: s.speech || new SilentSpeech(), approver: s.approver || new AutoApprover(), hooks: s.hooks || {}, log: s.log || console.log, llm: s.llm, vision: s.vision, store: s.store };
+    this.runsDir = cfg.runsDir || 'runs';
+  }
+
+  /** Same rule as the demo agent: given map; else the store's map; else build, save, read back. */
+  async getMap(input: AskInput): Promise<AppMap> {
+    const log = this.services.log;
+    if (input.map instanceof AppMap) return this.prepare(input.map, false);
+    const store = this.services.store;
+    if (store && input.url && !input.rebuild) {
+      const saved = await store.find(input.url);
+      if (saved) { log(`Using the saved map of ${new URL(input.url).origin} from ${store.name}`); return this.prepare(saved, false); }
+    }
+    if (!input.map) throw new Error('No map: give a graph file, a map source, or a store that has this site.');
+    const built = await this.prepare(await input.map(log), input.deepen ?? false);
+    if (!store) return built;
+    await store.save(built);
+    return (await store.find(built.startUrl)) || built;
+  }
+
+  private async prepare(map: AppMap, deepen: boolean): Promise<AppMap> {
+    if (!Object.keys(map.pages).length) throw new Error('The map has no pages.');
+    classifyRisk(map);
+    if (deepen) await exploreInteractions(map, { browserChannel: this.cfg.browserChannel, storageState: this.cfg.storageState, hooks: this.services.hooks, log: this.services.log });
+    else linkEdges(map);
+    return map;
+  }
+
+  async ask(input: AskInput): Promise<AskResult> {
+    const map = await this.getMap(input);
+    const source = map.data.source;
+    const u = await understand(map, input.question, this.services.llm);
+    if (!u.found) {
+      this.logQuestion(input.question, map.startUrl, false, u.reason);
+      return { found: false, steps: [NOT_FOUND], reason: u.reason, by: u.by, source };
+    }
+    const flow = flowFromRoute(map, u.route, input.question);
+    const steps = await answerSteps(map, flow, input.question, this.services.llm);
+    this.logQuestion(input.question, map.startUrl, true, u.reason);
+    const result: AskResult = { found: true, steps, reason: u.reason, by: u.by, source };
+    if (input.clip !== false) {
+      try {
+        result.clip = await showClip(map, flow, this.services, { runsDir: this.runsDir, headless: this.cfg.headless, browserChannel: this.cfg.browserChannel, storageState: this.cfg.storageState, question: input.question });
+      } catch (err) {
+        // The text answer still stands; say why there is no clip
+        result.clipError = err instanceof Error ? err.message : String(err);
+      }
+    }
+    return result;
+  }
+
+  /** Demand list: every question with whether it was answered (runs/questions.jsonl). */
+  private logQuestion(question: string, site: string, found: boolean, reason: string) {
+    try {
+      fs.mkdirSync(this.runsDir, { recursive: true });
+      fs.appendFileSync(path.join(this.runsDir, 'questions.jsonl'), JSON.stringify({ ts: new Date().toISOString(), site, question, found, reason }) + '\n');
+    } catch { /* logging must never break an answer */ }
+  }
+}
+
+export function createOnboardingAgent(cfg: OnboardingConfig = {}): OnboardingAgent {
+  return new OnboardingAgent(cfg);
+}

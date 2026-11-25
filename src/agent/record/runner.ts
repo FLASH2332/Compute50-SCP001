@@ -236,7 +236,12 @@ async function pointAt(page: Page, box: Box, ripple: boolean) {
 async function showSection(page: Page, env: RunnerEnv, step: FlowStep, ev: Emit, res: StepResult) {
   const sec = step.sectionId ? env.map.sections[step.sectionId] : undefined;
   if (!sec) throw new Error('section not in the map');
+  // Pointing at one control (onboarding): find the control itself first
+  const ctl = step.actionId ? env.map.controls[step.actionId] : undefined;
   const tries = [
+    ctl?.selector ? page.locator(ctl.selector).first() : null,
+    ctl ? page.getByRole(ctl.type === 'link' ? 'link' : 'button', { name: ctl.label }).first() : null,
+    ctl ? page.getByText(ctl.label, { exact: true }).first() : null,
     sec.selector ? page.locator(sec.selector).first() : null,
     page.getByRole('heading', { name: sec.name }).first(),
     page.getByRole('region', { name: sec.name }).first(),
@@ -258,7 +263,7 @@ async function showSection(page: Page, env: RunnerEnv, step: FlowStep, ev: Emit,
   await pointAt(page, shown, false);
   ev('act', { stepId: step.id });
   res.box = shown;
-  res.label = sec.name;
+  res.label = ctl?.label ?? sec.name;
   await page.waitForTimeout(1800);
 }
 
