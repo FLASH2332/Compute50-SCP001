@@ -42,6 +42,8 @@ export function baseSteps(map: AppMap, flow: Flow): string[] {
   return flow.steps.map((s, i) => {
     const where = s.op === 'click' ? map.controls[s.actionId]?.section?.name : undefined;
     const text = s.op === 'goto' ? `Open ${s.label}.`
+      : s.op === 'search' ? `Type “${s.value}” into the search box and press Enter.`
+      : s.op === 'open_result' ? (s.label !== s.value ? `Open ${quote(s.label)}.` : `Open the result that best matches “${s.value}”.`)
       : s.op === 'show' ? (s.intent.startsWith('Here') ? `Go to the ${quote(s.label)} section.` : `Click ${quote(s.label)}.`)
       : where && !/^(nav|header|footer|content|main)\b|:/.test(where) ? `In ${quote(where)}, click ${quote(s.label)}.` : `Click ${quote(s.label)}.`;
     return `${i + 1}. ${text}`;

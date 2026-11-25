@@ -115,6 +115,34 @@ test('an area can be the answer: "where is team admin?" leads to that area\'s ma
   assert.equal(map.states[u.route.target].pageId, set);
 });
 
+test('no route in the map: the site\'s search box is used (real control), never invented steps', async () => {
+  const map = expenseApp();
+  const home = 'https://app.test/';
+  map.controls['c-search'] = { id: 'c-search', pageId: home, label: 'Search expenses', type: 'input', inputType: 'search', selector: 'input[name="q"]', visible: true, risk: 'safe',
+    section: { id: 's-acct', name: 'Account', role: 'content', hidden: false } };
+  const runsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ob-search-'));
+  const agent = createOnboardingAgent({ runsDir, services: { log: () => {} } });
+  try {
+    const r = await agent.ask({ map, question: 'How do I find mileage reimbursement rules?', clip: false });
+    assert.equal(r.kind, 'search');
+    assert.deepEqual(r.steps, ['1. Type “mileage reimbursement rules” into the search box and press Enter.', '2. Open the result that best matches “mileage reimbursement rules”.']);
+    assert.match(r.reason, /searching the site instead/);
+    // Nothing to search for: still "can't find"
+    const none = await agent.ask({ map, question: 'How do I do that?', clip: false });
+    assert.deepEqual(none.steps, [NOT_FOUND]);
+    // Destructive questions are never turned into a search
+    const del = await agent.ask({ map, question: 'How do I delete my account?', clip: false });
+    assert.deepEqual(del.steps, [NOT_FOUND]);
+  } finally {
+    fs.rmSync(runsDir, { recursive: true, force: true });
+  }
+  // After recording, the last step names the result that was actually opened
+  const { searchFlow } = await import('../src/agent/onboard/search.js');
+  const flow = searchFlow(map, 'mileage rules', map.baseStateOf(urlTemplate(home))!.id)!;
+  flow.steps[flow.steps.length - 1].label = 'Mileage policy 2026';
+  assert.match(baseSteps(map, flow).at(-1)!, /Open “Mileage policy 2026”/);
+});
+
 test('model picks a ref; a made-up ref is rejected, never invented', async () => {
   const map = expenseApp();
   const ok = await understand(map, 'add an expense', model({ targets: [refOf(map, 'Add expense')], reason: 'Add expense opens the form' }));

@@ -37,7 +37,7 @@ export type Understood =
 
 const FILLER = new Set(['how', 'do', 'does', 'i', 'can', 'we', 'to', 'the', 'a', 'an', 'in', 'on', 'at', 'for', 'of', 'my', 'your', 'this', 'that', 'with', 'about', 'show', 'where', 'is', 'are', 'me', 'what', 'find', 'get']);
 // Questions about actions an onboarding answer must never walk through
-const DESTRUCTIVE = /\b(delete|remove|cancel|destroy|close my account|unsubscribe|deactivate)\b/i;
+export const DESTRUCTIVE = /\b(delete|remove|cancel|destroy|close my account|unsubscribe|deactivate)\b/i;
 
 export const terms = (value: string) =>
   [...new Set(value.toLowerCase().match(/[\p{L}\p{N}]{2,}/gu) ?? [])].filter(w => !FILLER.has(w));

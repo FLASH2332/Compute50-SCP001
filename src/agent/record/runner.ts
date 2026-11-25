@@ -273,9 +273,13 @@ async function openResult(page: Page, step: FlowStep, ev: Emit, res: StepResult)
   const stem = (w: string) => w.replace(/(es|s)$/, '');
   const words = norm(want).split(' ').filter(w => w.length > 2).map(stem);
   const links = page.getByRole('link');
-  const n = Math.min(await links.count(), 300);
   const site = new URL(page.url()).hostname.replace(/^www\./, '');
   let best: { i: number; score: number; text: string } | null = null;
+  // Results often load after the page ("Searching…"): look again for a few seconds before giving up
+  for (let attempt = 0; attempt < 4 && (!best || best.score < 0.3); attempt++) {
+  if (attempt) await page.waitForTimeout(2000);
+  best = null;
+  const n = Math.min(await links.count(), 300);
   for (let i = 0; i < n; i++) {
     const l = links.nth(i);
     if (!(await l.isVisible().catch(() => false))) continue;
@@ -292,6 +296,7 @@ async function openResult(page: Page, step: FlowStep, ev: Emit, res: StepResult)
     // Ties go to the link higher on the page (the top result)
     const score = 0.6 * covered + 0.4 * similarity(text, want) - (chrome ? 0.35 : 0) + Math.min(0.1, text.length / 400) - i * 0.0005;
     if (!best || score > best.score) best = { i, score, text };
+  }
   }
   if (!best || best.score < 0.3) throw new Error(`no link on the page matches "${want}"`);
   const link = links.nth(best.i);

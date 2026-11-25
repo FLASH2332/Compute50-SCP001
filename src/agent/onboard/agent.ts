@@ -14,10 +14,12 @@ import type { MapSource, Services } from '../core/ports.js';
 import { ensureMap } from '../core/mapProvider.js';
 import { SilentSpeech } from '../providers/speech.js';
 import { AutoApprover } from '../providers/approvers.js';
-import { answerSteps, flowFromRoute } from './answer.js';
+import { answerSteps, baseSteps, flowFromRoute } from './answer.js';
 import { showClip, type Clip } from './show.js';
-import { bestRoute, NOT_FOUND, startFrom, understand } from './understand.js';
+import { bestRoute, DESTRUCTIVE, NOT_FOUND, startFrom, understand } from './understand.js';
 import { overview, overviewKind } from './overview.js';
+import { searchFlow } from './search.js';
+import type { Flow } from '../plan/flows.js';
 
 export interface OnboardingConfig {
   services?: Partial<Services>;
@@ -41,7 +43,7 @@ export interface AskInput {
 
 export interface AskResult {
   found: boolean;
-  kind?: 'route' | 'what' | 'start';  // a way to do something, or an overview of the app
+  kind?: 'route' | 'what' | 'start' | 'search';  // a way to do something, an overview, or a site search
   steps: string[];       // numbered steps (or overview lines), or [NOT_FOUND]
   clip?: Clip;
   reason: string;
@@ -88,6 +90,11 @@ export class OnboardingAgent {
     }
     const u = await understand(map, input.question, this.services.llm, { from: input.from });
     if (!u.found) {
+      // Not in the map: if the site has a search box, search it for the question's topic
+      const start = startFrom(map, input.from).state;
+      // (never for destructive questions: "delete my account" stays "can't find")
+      const sflow = start && !DESTRUCTIVE.test(input.question) ? searchFlow(map, input.question, start) : null;
+      if (sflow) return this.searchAnswer(map, sflow, input, `${u.reason}; searching the site instead`, source);
       this.logQuestion(input.question, map.startUrl, false, u.reason);
       return { found: false, steps: [NOT_FOUND], reason: u.reason, by: u.by, source };
     }
@@ -103,6 +110,29 @@ export class OnboardingAgent {
         result.clipError = err instanceof Error ? err.message : String(err);
       }
     }
+    return result;
+  }
+
+  /**
+   * A search answer. With a clip, the search really runs: if no result matches, the answer is
+   * "can't find" (never invented), and the last step names the result that was opened.
+   */
+  private async searchAnswer(map: AppMap, flow: Flow, input: AskInput, reason: string, source: string): Promise<AskResult> {
+    const result: AskResult = { found: true, kind: 'search', steps: baseSteps(map, flow), reason, by: 'search box', source };
+    if (input.clip !== false) {
+      try {
+        result.clip = await showClip(map, flow, this.services, { runsDir: this.runsDir, headless: this.cfg.headless, browserChannel: this.cfg.browserChannel, storageState: this.cfg.storageState, question: input.question });
+        result.steps = baseSteps(map, flow);   // the runner wrote the opened result's title into the last step
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (/no link on the page matches/.test(msg)) {
+          this.logQuestion(input.question, map.startUrl, false, 'the site search found nothing matching');
+          return { found: false, steps: [NOT_FOUND], reason: `${reason}, but the search found nothing matching`, by: 'search box', source };
+        }
+        result.clipError = msg;
+      }
+    }
+    this.logQuestion(input.question, map.startUrl, true, reason);
     return result;
   }
 
