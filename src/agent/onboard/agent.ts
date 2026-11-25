@@ -35,6 +35,7 @@ export interface AskInput {
   rebuild?: boolean;
   deepen?: boolean;      // run the safe-click explorer on a freshly built map (slower)
   clip?: boolean;        // record a clip (default true)
+  from?: string;         // URL of the page the viewer is on: the answer starts there
 }
 
 export interface AskResult {
@@ -66,7 +67,7 @@ export class OnboardingAgent {
   async ask(input: AskInput): Promise<AskResult> {
     const map = await this.getMap(input);
     const source = map.data.source;
-    const u = await understand(map, input.question, this.services.llm);
+    const u = await understand(map, input.question, this.services.llm, { from: input.from });
     if (!u.found) {
       this.logQuestion(input.question, map.startUrl, false, u.reason);
       return { found: false, steps: [NOT_FOUND], reason: u.reason, by: u.by, source };

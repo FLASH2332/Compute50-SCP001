@@ -12,13 +12,13 @@ import { createOnboardingAgent } from './agent.js';
 
 dotenv.config();
 
-const USAGE = `Usage: npm run onboard -- <url> "<question>" [--graph <graph.json>] [--no-db] [--rebuild] [--no-clip] [--pages 20] [--headed]`;
+const USAGE = `Usage: npm run onboard -- <url> "<question>" [--from <url of the page you are on>] [--graph <graph.json>] [--no-db] [--rebuild] [--no-clip] [--pages 20] [--headed]`;
 
 async function main() {
   const flags = new Set(process.argv.slice(2).filter(a => a.startsWith('--')));
   const args = process.argv.slice(2);
   const value = (name: string) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined; };
-  const pos = args.filter((a, i) => !a.startsWith('--') && !['--graph', '--pages'].includes(args[i - 1]));
+  const pos = args.filter((a, i) => !a.startsWith('--') && !['--graph', '--pages', '--from'].includes(args[i - 1]));
   const [url, question] = pos;
   if (!url || !question) { console.log(USAGE); process.exitCode = 1; return; }
 
@@ -27,7 +27,7 @@ async function main() {
   try {
     const graph = value('--graph');
     const map = graph ? appMapFromGraphFile(graph) : crawlSource(url, { maxPages: Number(value('--pages') || 20), browserChannel: process.env.CRAWLER_BROWSER_CHANNEL });
-    const r = await agent.ask({ url, question, map, rebuild: flags.has('--rebuild'), clip: !flags.has('--no-clip') });
+    const r = await agent.ask({ url, question, map, from: value('--from'), rebuild: flags.has('--rebuild'), clip: !flags.has('--no-clip') });
     console.log(`\n${r.found ? 'Answer' : 'No answer'} (graph: ${r.source}, decided by ${r.by})`);
     for (const s of r.steps) console.log(`  ${s}`);
     console.log(`Why: ${r.reason}`);

@@ -60,6 +60,23 @@ test('keyword rules: question -> route through a link to a dialog', async () => 
   assert.match(map.states[u.route.target].dialog, /New expense/);
 });
 
+test('answers start from the page the viewer is on', async () => {
+  const map = expenseApp();
+  // Already on Expenses: adding an expense is one click, no detour through Home
+  const here = await understand(map, 'How do I add an expense?', undefined, { from: 'https://app.test/expenses?tab=mine' });
+  assert.equal(here.found, true);
+  if (!here.found) return;
+  assert.equal(here.route.start, map.baseStateOf(urlTemplate('https://app.test/expenses'))!.id);
+  assert.deepEqual(flowFromRoute(map, here.route, 'add').steps.map(s => s.label), ['Add expense']);
+  assert.match(here.reason, /from "Expenses"/);
+  // A page the map doesn't know: start from the start page, and say so
+  const lost = await understand(map, 'How do I add an expense?', undefined, { from: 'https://app.test/unknown' });
+  assert.equal(lost.found, true);
+  if (!lost.found) return;
+  assert.equal(lost.route.start, map.baseStateOf(urlTemplate('https://app.test/'))!.id);
+  assert.match(lost.reason, /not in the map/);
+});
+
 test('model picks a ref; a made-up ref is rejected, never invented', async () => {
   const map = expenseApp();
   const ok = await understand(map, 'add an expense', model({ targets: [refOf(map, 'Add expense')], reason: 'Add expense opens the form' }));

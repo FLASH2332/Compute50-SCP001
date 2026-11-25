@@ -183,10 +183,26 @@ export function bestRoute(map: AppMap, start: string, candidates: Ref[]): Route 
 }
 
 /** Question → route, using the model when there is one and keyword rules otherwise. */
-export async function understand(map: AppMap, question: string, llm?: TextModel): Promise<Understood> {
+/**
+ * Where the answer starts: the page the viewer is on (its URL), when the map knows that page
+ * (same URL template, so /invoice/123 matches /invoice/{id}); else the start page, with a note.
+ */
+export function startFrom(map: AppMap, from?: string): { state?: string; note: string } {
+  if (from) {
+    let tpl = '';
+    try { tpl = urlTemplate(new URL(from, map.startUrl).href); } catch { /* not a URL */ }
+    const here = tpl ? map.baseStateOf(tpl) : undefined;
+    if (here) return { state: here.id, note: `from "${map.pages[here.pageId]?.title || here.title}"` };
+    return { state: startState(map), note: 'the page you are on is not in the map, so from the start page' };
+  }
+  return { state: startState(map), note: '' };
+}
+
+export async function understand(map: AppMap, question: string, llm?: TextModel, opts: { from?: string } = {}): Promise<Understood> {
   const refs = buildRefs(map);
   const byRef = new Map(refs.map(r => [r.ref, r]));
-  const start = startState(map);
+  const where = startFrom(map, opts.from);
+  const start = where.state;
   if (!start) return { found: false, message: NOT_FOUND, reason: 'The map has no start page.', by: 'rules' };
   if (DESTRUCTIVE.test(question) && !refs.some(r => DESTRUCTIVE.test(r.label))) {
     return { found: false, message: NOT_FOUND, reason: 'No such action in the map.', by: 'rules' };
@@ -216,7 +232,7 @@ export async function understand(map: AppMap, question: string, llm?: TextModel)
   if (!candidates.length) return { found: false, message: NOT_FOUND, reason: reason || 'Unknown references.', by };
   const route = bestRoute(map, start, candidates);
   if (!route) return { found: false, message: NOT_FOUND, reason: 'No recorded route reaches it.', by };
-  return { found: true, route, reason, by, refs: candidates.map(c => c.ref) };
+  return { found: true, route, reason: where.note ? `${reason} (${where.note})` : reason, by, refs: candidates.map(c => c.ref) };
 }
 
 /** Label of a control, for steps and checks. */
