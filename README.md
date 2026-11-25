@@ -21,12 +21,15 @@ nothing is ever deleted, so the history stays.
 
 ### 1. Demo agent: from a goal to a video
 
-<!-- Replace this line with your first video (see "Adding the videos" below). -->
-_Video coming soon._
+Demo 1
+https://github.com/user-attachments/assets/df259119-db7d-42ec-995b-cbf48b833622
+
+Demo  2
+https://github.com/user-attachments/assets/c333dcf9-9379-4c07-87cb-581bfe4639a7)
 
 ### 2. Onboarding agent: answering a question by showing it
 
-<!-- Replace this line with your second video. -->
+
 _Video coming soon._
 
 ---
@@ -234,24 +237,3 @@ More detail: [`src/agent/README.md`](src/agent/README.md) and [`docs/`](docs/).
 The original engine: `npm start` opens a graph viewer and Demo Studio at http://localhost:3000 (crawl a site,
 view its graph, record a captioned walkthrough). `npm run crawl -- https://example.com 10 2` writes a Cypher export.
 Note that Memgraph Lab also uses port 3000, so set `PORT` in `.env` if you run both.
-
----
-
-## Adding the videos
-
-GitHub plays a video inline when its link comes from GitHub's own upload. A video file committed to the repo shows as
-a plain link instead.
-
-1. On github.com, open `README.md` and click the pencil icon (**Edit**).
-2. Drag your `.mp4` (or `.mov`) file into the editor, onto the line under the video's heading. GitHub uploads it
-   and inserts a link like `https://github.com/user-attachments/assets/…`.
-3. Keep that link on its own line, delete the `_Video coming soon._` line, and commit.
-
-The limit is 10 MB per file on a free account (100 MB on paid plans). For a larger video, compress it:
-
-```bash
-ffmpeg -i demo.mp4 -vcodec libx264 -crf 28 -preset slow -vf "scale=1280:-2" -acodec aac -b:a 96k demo-small.mp4
-```
-
-Other options: a GIF in `docs/media/` (`![Demo](docs/media/demo.gif)`), or a YouTube thumbnail that links to the
-video (`[![Demo](https://img.youtube.com/vi/VIDEO_ID/0.jpg)](https://youtu.be/VIDEO_ID)`).
