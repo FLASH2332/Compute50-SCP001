@@ -1,6 +1,12 @@
-# Demo Agent UI
+# Demo & Onboarding Agents UI
 
-A small web page for the demo agent in `src/agent/`, so you can make a demo without the CLI.
+A small web page for the agents in `src/agent/`, with no CLI needed:
+- a **site graph** card for the link you enter;
+- a **Make a demo** tab (the demo agent);
+- an **Ask a question** tab (the onboarding agent).
+
+Both tabs use the same graph in Memgraph. Memgraph is picked by default when `NEO4J_URI` (or `bolt://localhost:7687`)
+answers.
 
 ```bash
 npm ci && npx playwright install chromium   # once
@@ -37,6 +43,9 @@ Keys never reach the page; the page only sees on/off flags (LLM planner, voice, 
 | Login state | `storageState` |
 | Result: Edit / Undo / versions | `editDemo`, `undoDemo`, `listVersions` |
 | Result: Continue this run | `agent.resume(runId)` |
+| Site graph card | `store.find(url)` summary: pages, areas, UI states, most central pages; **Build / Rebuild** → `ensureMap({ rebuild: true })` |
+| Ask a question | `OnboardingAgent.ask({ url, question, from, clip })`: numbered steps, an overview, or a site search, plus the answer clip |
+| Questions asked | the demand list, `runs/questions.jsonl`, answered or not |
 
 Progress comes from the agent's `log` port (streamed to the page over Server-Sent Events) and from the run's
 `state.json` phase. One job runs at a time, since the agent drives one browser.
@@ -61,4 +70,8 @@ ui/public/styles.css light and dark
 | POST | `/api/jobs/:id/cancel` | cancel while a question is pending |
 | GET | `/api/runs`, `/api/runs/:runId` | past runs; one run's storyboard, takes, outputs, versions |
 | POST | `/api/runs/:runId/edit` \| `/undo` \| `/resume` | edit by request, undo, continue |
+| GET | `/api/graph?url=&storeUri=` | what the database holds for a site |
+| POST | `/api/graph` | build / rebuild the site's graph (job) |
+| POST | `/api/ask` | ask the onboarding agent (job; result has `steps`, `kind`, `reason`, `clipUrl`) |
+| GET | `/api/questions` | the demand list, newest first |
 | GET | `/media/...` | files under the runs folder (videos, captions, stills) |

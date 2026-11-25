@@ -3,6 +3,24 @@
 Updated 2026-11-25. What has been built on `graph_base` / `new_graph_base`, what the first runs showed, and what is
 still open. How to run things: [bench/README.md](../bench/README.md).
 
+## Merged with the agents (`agents-on-graph`)
+
+`agents-on-graph` = `new_graph_base` + the demo agent, onboarding agent and UI from `demo-agent` /
+`onboarding-any-graph`. The graph builder here (`src/sections/`) is unchanged; the agents read what it builds.
+
+| Piece | Where |
+| --- | --- |
+| Graph builder (this branch's work) | `src/sections/`, `src/llm.ts` |
+| Graph in Memgraph, shared by both agents | `src/agent/adapters/graphDbStore.ts` (`App`, `Area`, page metrics, locators); `src/agent/core/mapProvider.ts` |
+| Graph builder → agents | `src/agent/adapters/sectionGraph.ts` (PageRank, areas, profile, locators, risk, reliability) |
+| Demo agent | `src/agent/run`, `plan`, `record`, `media` (tours by PageRank, areas as chapters) |
+| Onboarding agent | `src/agent/onboard/` (viewer's page, "what can I do / where to start", search fallback) |
+| UI | `ui/` (site graph card, demo and ask tabs) |
+| Commands | `npm run graph`, `npm run agent`, `npm run onboard`; the benchmark's agent is now `npm run bench:agent` |
+
+The benchmark empties the database when it loads a snapshot. Point it at a separate Memgraph (`MEMGRAPH_URI`,
+see `bench/README.md`); the agents use `NEO4J_URI`.
+
 ## The two branches
 
 | Branch | What it is |
