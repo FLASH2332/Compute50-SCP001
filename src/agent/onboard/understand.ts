@@ -15,7 +15,7 @@ export const NOT_FOUND = "I can't find that in this app.";
 /** One thing the question can point at. */
 export interface Ref {
   ref: string;                 // P1, S1, A1, D1 (stable within one map)
-  kind: 'page' | 'section' | 'control' | 'state';
+  kind: 'page' | 'section' | 'control' | 'state' | 'area';
   label: string;               // on-screen name
   aliases: string[];           // earlier names of the control (renamed buttons)
   text: string;                // one line for the model
@@ -87,6 +87,18 @@ export function buildRefs(map: AppMap): Ref[] {
     }
   }
 
+  // Areas (from the graph builder): a question can name a part of the app ("billing"); it leads to the area's most central page
+  let r = 0;
+  for (const area of Object.values(map.areas)) {
+    const pages = area.pageIds.map(id => map.pages[id]).filter(Boolean).sort((x, y) => (y.rank ?? 0) - (x.rank ?? 0));
+    const top = (area.medoid && map.pages[area.medoid]) || pages[0];
+    const state = top && map.baseStateOf(top.template)?.id;
+    if (!state) continue;
+    const rr = `R${++r}`;
+    refs.push({ ref: rr, kind: 'area', label: area.name, aliases: [], state,
+      text: `${rr} area "${area.name}"${area.summary ? ` - ${area.summary.slice(0, 100)}` : ''}: pages ${pages.slice(0, 6).map(p => pageRef.get(p.id) ?? p.title).join(', ')}` });
+  }
+
   for (const st of Object.values(map.states)) {
     if (!st.dialog && !st.tab) continue;
     const dr = `D${++d}`;
@@ -152,7 +164,7 @@ export function siteMapText(question: string, refs: Ref[], budget = 18000): stri
 }
 
 const SYSTEM = [
-  'You are an onboarding guide for a web app. You get a user question and a site map of pages (P#),',
+  'You are an onboarding guide for a web app. You get a user question and a site map of areas (R#, the parts of the app), pages (P#),',
   'sections (S#), controls (A#) with what they do, and dialogs or tabs (D#).',
   'Return the refs a new user should reach to do what they ask, best first: {"targets":["A1"],"reason":"..."}.',
   'Prefer the control that does the task over the page it is on. Only use refs from the map.',

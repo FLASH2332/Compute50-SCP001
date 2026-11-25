@@ -16,7 +16,8 @@ import { SilentSpeech } from '../providers/speech.js';
 import { AutoApprover } from '../providers/approvers.js';
 import { answerSteps, flowFromRoute } from './answer.js';
 import { showClip, type Clip } from './show.js';
-import { NOT_FOUND, understand } from './understand.js';
+import { bestRoute, NOT_FOUND, startFrom, understand } from './understand.js';
+import { overview, overviewKind } from './overview.js';
 
 export interface OnboardingConfig {
   services?: Partial<Services>;
@@ -40,7 +41,8 @@ export interface AskInput {
 
 export interface AskResult {
   found: boolean;
-  steps: string[];       // numbered steps, or [NOT_FOUND]
+  kind?: 'route' | 'what' | 'start';  // a way to do something, or an overview of the app
+  steps: string[];       // numbered steps (or overview lines), or [NOT_FOUND]
   clip?: Clip;
   reason: string;
   by: string;            // 'model' or 'keyword rules'
@@ -67,6 +69,23 @@ export class OnboardingAgent {
   async ask(input: AskInput): Promise<AskResult> {
     const map = await this.getMap(input);
     const source = map.data.source;
+    // Questions about the app itself ("what can I do here?", "where should I start?") come from its areas and PageRank
+    const kind = overviewKind(input.question);
+    if (kind) {
+      const ov = overview(map, kind, input.question, input.from);
+      if (ov.lines.length) {
+        this.logQuestion(input.question, map.startUrl, true, ov.reason);
+        const result: AskResult = { found: true, kind, steps: ov.lines, reason: ov.reason, by: 'graph', source };
+        // "Where should I start?" also shows the way to the first page
+        const start = startFrom(map, input.from).state;
+        const route = kind === 'start' && ov.target && start ? bestRoute(map, start, [{ ref: 'top', kind: 'page', label: '', aliases: [], text: '', state: ov.target }]) : null;
+        if (route && route.steps.length && input.clip !== false) {
+          try { result.clip = await showClip(map, flowFromRoute(map, route, input.question), this.services, { runsDir: this.runsDir, headless: this.cfg.headless, browserChannel: this.cfg.browserChannel, storageState: this.cfg.storageState, question: input.question }); }
+          catch (err) { result.clipError = err instanceof Error ? err.message : String(err); }
+        }
+        return result;
+      }
+    }
     const u = await understand(map, input.question, this.services.llm, { from: input.from });
     if (!u.found) {
       this.logQuestion(input.question, map.startUrl, false, u.reason);
@@ -75,7 +94,7 @@ export class OnboardingAgent {
     const flow = flowFromRoute(map, u.route, input.question);
     const steps = await answerSteps(map, flow, input.question, this.services.llm);
     this.logQuestion(input.question, map.startUrl, true, u.reason);
-    const result: AskResult = { found: true, steps, reason: u.reason, by: u.by, source };
+    const result: AskResult = { found: true, kind: 'route', steps, reason: u.reason, by: u.by, source };
     if (input.clip !== false) {
       try {
         result.clip = await showClip(map, flow, this.services, { runsDir: this.runsDir, headless: this.cfg.headless, browserChannel: this.cfg.browserChannel, storageState: this.cfg.storageState, question: input.question });

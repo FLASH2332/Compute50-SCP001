@@ -77,6 +77,44 @@ test('answers start from the page the viewer is on', async () => {
   assert.match(lost.reason, /not in the map/);
 });
 
+test('"what can I do?", "what can I do here?" and "where should I start?" come from areas and PageRank', async () => {
+  const map = expenseApp();
+  const [home, exp, set] = ['/', '/expenses', '/settings'].map(p => 'https://app.test' + p);
+  map.pages[home].rank = 0.2; map.pages[exp].rank = 0.5; map.pages[set].rank = 0.3;
+  map.data.areas = { money: { id: 'money', name: 'Spending', pageIds: [exp], medoid: exp }, people: { id: 'people', name: 'Team admin', pageIds: [set] } };
+  map.pages[exp].areaId = 'money'; map.pages[set].areaId = 'people';
+  map.data.app = { purpose: 'Track team expenses' };
+  const runsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ob-ov-'));
+  const agent = createOnboardingAgent({ runsDir, services: { log: () => {} } });
+  try {
+    const what = await agent.ask({ map, question: 'What can I do in this app?', clip: false });
+    assert.equal(what.kind, 'what');
+    assert.deepEqual(what.steps.map(s => s.replace(/ —.*/, '')), ['• Spending', '• Team admin']);
+    assert.match(what.reason, /Track team expenses/);
+
+    const here = await agent.ask({ map, question: 'what can I do here?', from: exp, clip: false });
+    assert.ok(here.steps.some(s => s.includes('Your expenses')), here.steps.join(' | '));
+    assert.ok(here.steps.some(s => s.includes('“Add expense”')), here.steps.join(' | '));
+
+    const start = await agent.ask({ map, question: 'Where should I start?', clip: false });
+    assert.equal(start.kind, 'start');
+    assert.match(start.steps[0], /^1\. Expenses \(in Spending\) — start here/);
+  } finally {
+    fs.rmSync(runsDir, { recursive: true, force: true });
+  }
+});
+
+test('an area can be the answer: "where is team admin?" leads to that area\'s main page', async () => {
+  const map = expenseApp();
+  const set = 'https://app.test/settings';
+  map.data.areas = { people: { id: 'people', name: 'Team admin', pageIds: [set], medoid: set } };
+  assert.ok(buildRefs(map).some(r => r.kind === 'area' && r.label === 'Team admin'));
+  const u = await understand(map, 'Where is team admin?');
+  assert.equal(u.found, true);
+  if (!u.found) return;
+  assert.equal(map.states[u.route.target].pageId, set);
+});
+
 test('model picks a ref; a made-up ref is rejected, never invented', async () => {
   const map = expenseApp();
   const ok = await understand(map, 'add an expense', model({ targets: [refOf(map, 'Add expense')], reason: 'Add expense opens the form' }));
