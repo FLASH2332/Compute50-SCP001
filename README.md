@@ -22,10 +22,12 @@ nothing is ever deleted, so the history stays.
 ### 1. Demo agent: from a goal to a video
 
 Demo 1
+
 https://github.com/user-attachments/assets/df259119-db7d-42ec-995b-cbf48b833622
 
 Demo  2
-https://github.com/user-attachments/assets/c333dcf9-9379-4c07-87cb-581bfe4639a7)
+
+https://github.com/user-attachments/assets/c333dcf9-9379-4c07-87cb-581bfe4639a7
 
 ### 2. Onboarding agent: answering a question by showing it
 
