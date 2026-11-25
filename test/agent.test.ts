@@ -336,6 +336,18 @@ test('freeze-sync: each action lands on its words; short footage freezes, long f
   assert.ok(Math.abs(total - (VOICE_OFFSET + v.duration + VOICE_TAIL)) < 0.05, `shot lasts as long as its voice: ${total}`);
 });
 
+test('pauses: SSML break tags are dropped from word timings; a short shot gets pauses between its beats', async () => {
+  const { dropTags } = await import('../src/agent/providers/speech.js');
+  const { pauseFor, MAX_PAUSE } = await import('../src/agent/media/narrate.js');
+  const ws = ['Open', 'page.', '<break', 'time="1.0s"', '/>', 'Pick', 'one.'].map((text, i) => ({ text, start: i, end: i + 0.5 }));
+  assert.deepEqual(dropTags(ws).map(w => w.text), ['Open', 'page.', 'Pick', 'one.']);
+  const v = { shotId: 's', preset: 'calm' as const, line: '', file: '', lead: 0, duration: 6.4, words: [], beatTimes: {} };
+  assert.equal(pauseFor(v, 3, 9), 1, '2 s short over 2 gaps');
+  assert.equal(pauseFor(v, 3, 20), MAX_PAUSE, 'never more than the longest pause');
+  assert.equal(pauseFor(v, 1, 20), 0, 'one beat has no gap');
+  assert.equal(pauseFor(v, 3, 7.1), 0, 'close enough already');
+});
+
 test('groq pacing: waits for the tokens-per-minute window instead of hitting the limit', async () => {
   const { TokenBucket, parseReset } = await import('../src/agent/providers/groq.js');
   assert.equal(parseReset('697ms'), 697);

@@ -12,7 +12,7 @@ import { Gate } from '../nav/gate.js';
 import { modeFor } from '../nav/risk.js';
 import type { Flow } from '../plan/flows.js';
 import { resolveLine, WPS, writeScript, type Script } from '../media/script.js';
-import { attachVoices, paceOf, shotSeconds, spokenBeats, synthesizeShots, type ShotVoice } from '../media/narrate.js';
+import { attachVoices, paceOf, pauseFor, shotSeconds, spokenBeats, synthesizeShots, type ShotVoice } from '../media/narrate.js';
 import { tidy } from '../media/voice.js';
 import { words } from '../media/voice.js';
 import type { Speech, TextModel } from '../core/ports.js';
@@ -114,7 +114,8 @@ export class Run {
     const results = Object.fromEntries(ids.map(id => [id, this.resultOf(id)]));
     const spoken = (id: string) => tidy(spokenBeats(script.shots[id], results[id]).map(b => b.text).join(' '));
     const need = ids.filter(id => script.shots[id] && (!have[id] || have[id].line !== spoken(id)));
-    Object.assign(have, await synthesizeShots(script, need, preset, { speech, runDir: this.dir }, results));
+    const kept = Object.fromEntries(need.filter(id => have[id]?.pause).map(id => [id, have[id].pause!]));
+    Object.assign(have, await synthesizeShots(script, need, preset, { speech, runDir: this.dir }, results, kept));
     const ctx = this.lineContexts();
     for (const id of need) {
       const target = this.storyboard?.shots.find(x => x.id === id)?.targetSec ?? 0;
@@ -131,6 +132,13 @@ export class Run {
       script.shots[id] = redo.shots[id];
       Object.assign(have, await synthesizeShots(script, [id], preset, { speech, runDir: this.dir }, results));
       script.notes.push(`${id}: line ${long ? 'shortened' : 'lengthened'} to fit its ${target}s (voice speaks ${measured.toFixed(1)} words/s)`);
+    }
+    // Still short: pause between sentences (SSML breaks) rather than pad the line with filler
+    for (const id of need) {
+      const target = this.storyboard?.shots.find(x => x.id === id)?.targetSec ?? 0;
+      const pause = target && have[id] ? pauseFor(have[id], spokenBeats(script.shots[id], results[id]).length, target) : 0;
+      if (!pause || pause === have[id].pause) continue;
+      Object.assign(have, await synthesizeShots(script, [id], preset, { speech, runDir: this.dir }, results, { [id]: pause }));
     }
     this.save();
     return Object.fromEntries(ids.filter(id => have[id]).map(id => [id, have[id]]));

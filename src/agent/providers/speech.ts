@@ -40,7 +40,7 @@ export class ElevenLabsSpeech extends CachedSpeech {
     fs.writeFileSync(path.join(dir, file), Buffer.from(body.audio_base64, 'base64'));
     const al = body.alignment;
     if (!al) return { file, duration: estimateDuration(text, speed), words: estimateWords(text, speed) };
-    return { file, duration: al.character_end_times_seconds[al.character_end_times_seconds.length - 1], words: wordsFromChars(al.characters, al.character_start_times_seconds, al.character_end_times_seconds) };
+    return { file, duration: al.character_end_times_seconds[al.character_end_times_seconds.length - 1], words: dropTags(wordsFromChars(al.characters, al.character_start_times_seconds, al.character_end_times_seconds)) };
   }
 }
 
@@ -59,6 +59,18 @@ export function speechFromEnv(env = process.env): Speech {
   return env.ELEVENLABS_API_KEY ? new ElevenLabsSpeech(env.ELEVENLABS_API_KEY, env.ELEVENLABS_VOICE_ID || undefined, env.ELEVENLABS_MODEL || undefined) : new SilentSpeech();
 }
 
+/** SSML tags (`<break time="1s" />`) come back in the alignment as zero-length words; they are not spoken. */
+export function dropTags(ws: Word[]): Word[] {
+  const out: Word[] = [];
+  let inTag = false;
+  for (const w of ws) {
+    if (!inTag && w.text.startsWith('<')) inTag = true;
+    if (inTag) { if (w.text.endsWith('>')) inTag = false; continue; }
+    out.push(w);
+  }
+  return out;
+}
+
 export function wordsFromChars(chars: string[], starts: number[], ends: number[]): Word[] {
   const words: Word[] = [];
   let cur: Word | null = null;
@@ -72,7 +84,9 @@ export function wordsFromChars(chars: string[], starts: number[], ends: number[]
 }
 
 const WPS = 2.6;
-export const estimateDuration = (text: string, speed = 1) => Math.round((text.split(/\s+/).filter(Boolean).length / (WPS * speed) + 0.2) * 1000) / 1000;
+const BREAK = /<break\s+time="([\d.]+)s"\s*\/>/g;
+const pauses = (text: string) => [...text.matchAll(BREAK)].reduce((d, m) => d + Number(m[1]), 0);
+export const estimateDuration = (text: string, speed = 1) => Math.round((text.replace(BREAK, ' ').split(/\s+/).filter(Boolean).length / (WPS * speed) + pauses(text) + 0.2) * 1000) / 1000;
 
 export function estimateWords(text: string, speed = 1): Word[] {
   const ws = text.split(/\s+/).filter(Boolean);

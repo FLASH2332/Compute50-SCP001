@@ -19,6 +19,7 @@ export interface ShotVoice {
   duration: number;                   // first word to last word
   words: Word[];                      // times from the first word (lead removed)
   beatTimes: Record<string, number>;  // step id → seconds after the first word when its words start
+  pause?: number;                     // seconds of silence between beats (SSML <break>), to fill a short shot
 }
 
 /** Voice starts this long after the shot starts; the shot ends this long after the voice. */
@@ -48,10 +49,13 @@ export function beatTimesFrom(beats: { stepId: string; text: string }[], ws: Wor
 export interface NarrateDeps { speech: Speech; runDir: string }
 
 /** Synthesizes one shot, stitched to its neighbours' lines (ElevenLabs request stitching). */
-export async function synthesizeShot(sc: ShotScript, preset: Preset, deps: NarrateDeps, opts: { result?: string; previousText?: string; nextText?: string } = {}): Promise<ShotVoice> {
+export async function synthesizeShot(sc: ShotScript, preset: Preset, deps: NarrateDeps, opts: { result?: string; previousText?: string; nextText?: string; pause?: number } = {}): Promise<ShotVoice> {
   const beats = spokenBeats(sc, opts.result);
   const line = tidy(beats.map(b => b.text).join(' '));
-  const clip = await deps.speech.synthesize(line, path.join(deps.runDir, 'voice'), preset.voiceSpeed, { previousText: opts.previousText, nextText: opts.nextText });
+  // A pause between beats is an SSML break (ElevenLabs: up to 3 s; few per clip)
+  const pause = opts.pause && beats.length > 1 ? Math.min(MAX_PAUSE, Math.round(opts.pause * 10) / 10) : 0;
+  const said = pause ? beats.map(b => tidy(b.text)).join(` <break time="${pause}s" /> `) : line;
+  const clip = await deps.speech.synthesize(said, path.join(deps.runDir, 'voice'), preset.voiceSpeed, { previousText: opts.previousText, nextText: opts.nextText });
   const lead = Math.max(0, clip.words[0]?.start ?? 0);
   const end = clip.words.length ? clip.words[clip.words.length - 1].end : clip.duration;
   const shifted = clip.words.map(w => ({ text: w.text, start: Math.max(0, w.start - lead), end: Math.max(0, w.end - lead) }));
@@ -59,12 +63,12 @@ export async function synthesizeShot(sc: ShotScript, preset: Preset, deps: Narra
     shotId: sc.shotId, preset: preset.name, line,
     file: path.relative(deps.runDir, path.join(deps.runDir, 'voice', clip.file)).replace(/\\/g, '/'),
     lead: Math.round(lead * 1000) / 1000, duration: Math.round((end - lead) * 1000) / 1000, words: shifted,
-    beatTimes: beatTimesFrom(beats, shifted)
+    beatTimes: beatTimesFrom(beats, shifted), ...(pause ? { pause } : {})
   };
 }
 
 /** Synthesizes every listed shot in order (each one stitched to the lines around it). */
-export async function synthesizeShots(script: Script, order: string[], preset: Preset, deps: NarrateDeps, results: Record<string, string | undefined> = {}): Promise<Record<string, ShotVoice>> {
+export async function synthesizeShots(script: Script, order: string[], preset: Preset, deps: NarrateDeps, results: Record<string, string | undefined> = {}, pauses: Record<string, number> = {}): Promise<Record<string, ShotVoice>> {
   const out: Record<string, ShotVoice> = {};
   const all = Object.keys(script.shots);
   for (const id of order) {
@@ -74,12 +78,22 @@ export async function synthesizeShots(script: Script, order: string[], preset: P
     const prev = all[k - 1] && script.shots[all[k - 1]];
     const next = all[k + 1] && script.shots[all[k + 1]];
     out[id] = await synthesizeShot(sc, preset, deps, {
-      result: results[id],
+      result: results[id], pause: pauses[id],
       previousText: prev ? spokenBeats(prev, results[prev.shotId]).map(b => b.text).join(' ') : undefined,
       nextText: next ? spokenBeats(next, results[next.shotId]).map(b => b.text).join(' ') : undefined
     });
   }
   return out;
+}
+
+/** Longest pause between two beats: longer reads as dead air. */
+export const MAX_PAUSE = 1.5;
+
+/** The pause between beats that brings a shot's voice up to `target` seconds (0 if none is needed or possible). */
+export function pauseFor(v: ShotVoice, beats: number, target: number): number {
+  const gaps = beats - 1, short = target - shotSeconds(v) + (v.pause ?? 0) * gaps;
+  if (gaps < 1 || short < 0.3 * gaps) return 0;
+  return Math.min(MAX_PAUSE, Math.round((short / gaps) * 10) / 10);
 }
 
 /** How long a shot needs on screen for its voice. */
