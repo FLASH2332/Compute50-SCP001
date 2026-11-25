@@ -362,6 +362,30 @@ describe('fixture app', () => {
       assert.equal(Object.keys(back.controls).length, Object.keys(map.controls).length);
       assert.equal(Object.keys(back.edges).length, Object.keys(map.edges).filter(e => map.pages[map.states[map.edges[e].from]?.pageId] && map.pages[map.states[map.edges[e].to]?.pageId]).length);
       assert.deepEqual(back.route(null, Object.values(back.states).find(s => s.dialog === 'Invite a teammate' && !s.seeded)!.id)?.length ? 'routable' : 'no route', 'routable');
+
+      // The graph builder's fields survive the round trip: areas, site profile, page ranks, locators, list samples
+      const copy = new AppMap(JSON.parse(JSON.stringify(map.data)));
+      const [home, members] = Object.values(copy.pages);
+      copy.data.app = { purpose: 'Invoicing for small teams', size: 'small', flows: ['create an invoice'] };
+      copy.data.areas = { a1: { id: 'a1', name: 'Billing', pageIds: [home.id], medoid: home.id }, a2: { id: 'a2', name: 'Team', pageIds: [members.id] } };
+      home.rank = 0.42;
+      const c = Object.values(copy.controls)[0];
+      c.locators = ['role=button|name=Save', 'css=#save'];
+      c.samples = ['Row 1', 'Row 2'];
+      c.count = 12;
+      await store.save(copy);
+      const back2 = (await store.find(copy.startUrl))!;
+      assert.deepEqual(back2.app, copy.data.app);
+      assert.deepEqual(Object.values(back2.areas).map(a => a.name).sort(), ['Billing', 'Team']);
+      assert.equal(back2.pages[home.id].areaId, 'a1');
+      assert.equal(back2.pages[home.id].rank, 0.42);
+      assert.deepEqual(back2.controls[c.id].locators, c.locators);
+      assert.deepEqual(back2.controls[c.id].samples, c.samples);
+      assert.equal(back2.controls[c.id].count, 12);
+      // Saving again replaces areas instead of piling them up
+      copy.data.areas = { a3: { id: 'a3', name: 'Everything', pageIds: [home.id, members.id] } };
+      await store.save(copy);
+      assert.deepEqual(Object.values((await store.find(copy.startUrl))!.areas).map(a => a.name), ['Everything']);
       await store.forget(map.startUrl);
     } finally { await store.close(); }
   });

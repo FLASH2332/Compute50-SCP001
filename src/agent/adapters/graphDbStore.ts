@@ -10,7 +10,7 @@
  * Cypher export (studio "sync"), so both write to the same nodes.
  */
 import neo4j, { type Driver } from 'neo4j-driver';
-import { AppMap, type ActionEdge, type AppPage, type AppSection, type Control, type UiState } from '../core/appMap.js';
+import { AppMap, type ActionEdge, type AppArea, type AppPage, type AppProfile, type AppSection, type Control, type UiState } from '../core/appMap.js';
 import type { MapStore } from '../core/ports.js';
 
 export interface GraphDbConfig { uri?: string; username?: string; password?: string; database?: string }
@@ -18,6 +18,7 @@ export interface GraphDbConfig { uri?: string; username?: string; password?: str
 const json = (v: unknown) => (v === undefined ? null : JSON.stringify(v));
 const parse = <T>(v: unknown): T | undefined => (typeof v === 'string' && v ? JSON.parse(v) : undefined);
 export const originOf = (url: string) => new URL(url).origin;
+const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
 
 export class GraphDbStore implements MapStore {
   readonly name: string;
@@ -47,7 +48,7 @@ export class GraphDbStore implements MapStore {
   private async ensureIndexes() {
     if (this.indexed) return;
     this.indexed = true;
-    for (const [label, key] of [['App', 'origin'], ['Page', 'url'], ['Section', 'id'], ['Action', 'id'], ['State', 'id']]) {
+    for (const [label, key] of [['App', 'origin'], ['Page', 'url'], ['Section', 'id'], ['Action', 'id'], ['State', 'id'], ['Area', 'id']]) {
       // Memgraph syntax first, then Neo4j's; one of them works, the other is ignored
       await this.run(`CREATE INDEX ON :${label}(${key})`).catch(() => this.run(`CREATE INDEX IF NOT EXISTS FOR (n:${label}) ON (n.${key})`).catch(() => {}));
     }
@@ -61,7 +62,8 @@ export class GraphDbStore implements MapStore {
     const pages: Record<string, AppPage> = {};
     for (const r of await this.run('MATCH (:App {origin: $origin})-[:HAS_PAGE]->(p:Page) RETURN p', { origin })) {
       const p = r.get('p').properties;
-      pages[p.url] = { id: p.url, url: p.loadedUrl || p.url, title: p.title || '', template: p.template || '' };
+      pages[p.url] = { id: p.url, url: p.loadedUrl || p.url, title: p.title || '', template: p.template || '',
+        rank: num(p.pagerank), betweenness: num(p.betweenness), reachable: p.reachable ?? undefined, deadEnd: p.deadEnd ?? undefined };
     }
     if (!Object.keys(pages).length) return null;
     const sections: Record<string, AppSection> = {};
@@ -79,7 +81,8 @@ export class GraphDbStore implements MapStore {
         id: a.id, pageId, label: a.label || '', type: a.type, inputType: a.inputType || undefined, selector: a.selector, href: a.href || undefined,
         navigatesTo: target && pages[target] ? target : undefined, visible: a.visible !== false,
         section: { id: s.id, name: s.name || '', role: s.role || 'content', hidden: !!s.hidden },
-        risk: a.risk || undefined, aliases: a.aliases || undefined, hits: parse(a.hits), status: a.status || undefined, box: parse(a.box)
+        risk: a.risk || undefined, aliases: a.aliases || undefined, hits: parse(a.hits), status: a.status || undefined, box: parse(a.box),
+        locators: a.locators?.length ? a.locators : undefined, samples: a.samples?.length ? a.samples : undefined, count: num(a.count)
       };
     }
     const states: Record<string, UiState> = {};
@@ -94,7 +97,15 @@ export class GraphDbStore implements MapStore {
       edges[e.id] = { id: e.id, from: r.get('from'), to: r.get('to'), actionId: e.actionId || '', kind: e.kind, risk: e.risk || 'safe', n: Number(e.n || 0), s: Number(e.s || 0),
         fails: Number(e.fails || 0), reliability: Number(e.reliability ?? 0.5), cost: Number(e.cost ?? 1), status: e.status || 'ok' };
     }
-    return new AppMap({ source: `${app.source || 'unknown'} (from ${this.name})`, startUrl: app.startUrl, pages, sections, controls, states, edges });
+    const areas: Record<string, AppArea> = {};
+    for (const r of await this.run('MATCH (:App {origin: $origin})-[:HAS_AREA]->(ar:Area) OPTIONAL MATCH (ar)-[:CONTAINS]->(p:Page) RETURN ar, collect(p.url) AS pageIds', { origin })) {
+      const ar = r.get('ar').properties;
+      const id = String(ar.id).slice(origin.length + 1);
+      areas[id] = { id, name: ar.name, summary: ar.summary || undefined, medoid: ar.medoid || undefined, pageIds: (r.get('pageIds') as string[]).filter(u => pages[u]) };
+      for (const u of areas[id].pageIds) pages[u].areaId ??= id;
+    }
+    const profile: AppProfile | undefined = app.purpose || app.size ? { purpose: app.purpose || undefined, size: app.size || undefined, flows: app.flows?.length ? app.flows : undefined } : undefined;
+    return new AppMap({ source: `${app.source || 'unknown'} (from ${this.name})`, startUrl: app.startUrl, pages, sections, controls, areas, app: profile, states, edges });
   }
 
   async save(map: AppMap): Promise<void> {
@@ -109,19 +120,24 @@ export class GraphDbStore implements MapStore {
       const id = sectionOf(c);
       if (!sections.has(id)) sections.set(id, { id, pageId: c.pageId, name: c.section?.name || 'page', role: c.section?.role || 'content', hidden: !!c.section?.hidden, order: 999, selector: null, summary: null });
     }
-    await this.run('MERGE (a:App {origin: $origin}) SET a.startUrl = $startUrl, a.source = $source, a.updatedAt = $now',
-      { origin, startUrl: d.startUrl, source: d.source.replace(/ \(from .*\)$/, ''), now: new Date().toISOString() });
-    await this.run(`UNWIND $pages AS p MERGE (n:Page {url: p.id}) SET n.title = p.title, n.loadedUrl = p.url, n.template = p.template, n.crawled = true, n.status = 'ok'
-      WITH n MATCH (a:App {origin: $origin}) MERGE (a)-[:HAS_PAGE]->(n)`, { origin, pages: Object.values(d.pages) });
+    // One App node per site: the agents' fields plus the graph builder's profile (purpose, size, flows)
+    await this.run('MERGE (a:App {origin: $origin}) SET a.startUrl = $startUrl, a.source = $source, a.updatedAt = $now, a.purpose = $purpose, a.size = $size, a.flows = $flows',
+      { origin, startUrl: d.startUrl, source: d.source.replace(/ \(from .*\)$/, ''), now: new Date().toISOString(),
+        purpose: d.app?.purpose ?? null, size: d.app?.size ?? null, flows: d.app?.flows ?? [] });
+    await this.run(`UNWIND $pages AS p MERGE (n:Page {url: p.id}) SET n.id = p.id, n.title = p.title, n.loadedUrl = p.url, n.template = p.template, n.crawled = true, n.status = 'ok',
+          n.pagerank = p.rank, n.betweenness = p.betweenness, n.reachable = p.reachable, n.deadEnd = p.deadEnd
+      WITH n MATCH (a:App {origin: $origin}) MERGE (a)-[:HAS_PAGE]->(n)`, { origin, pages: Object.values(d.pages).map(p => ({ ...p, rank: p.rank ?? null, betweenness: p.betweenness ?? null, reachable: p.reachable ?? null, deadEnd: p.deadEnd ?? null })) });
     await this.run(`UNWIND $sections AS s MATCH (p:Page {url: s.pageId}) MERGE (n:Section {id: s.id})
       SET n.name = s.name, n.role = s.role, n.hidden = s.hidden, n.order = s.order, n.regionSelector = s.selector, n.summary = s.summary MERGE (p)-[:HAS_SECTION]->(n)`,
       { sections: [...sections.values()] });
     await this.run(`UNWIND $controls AS c MATCH (s:Section {id: c.sectionId}) MERGE (a:Action {id: c.id})
       SET a.label = c.label, a.type = c.type, a.inputType = c.inputType, a.selector = c.selector, a.href = c.href, a.visible = c.visible,
-          a.risk = c.risk, a.aliases = c.aliases, a.hits = c.hits, a.status = c.status, a.box = c.box
+          a.risk = c.risk, a.aliases = c.aliases, a.hits = c.hits, a.status = c.status, a.box = c.box,
+          a.locators = c.locators, a.samples = c.samples, a.count = c.count
       MERGE (s)-[:HAS_ACTION]->(a)`, {
       controls: Object.values(d.controls).map(c => ({ id: c.id, sectionId: sectionOf(c), label: c.label, type: c.type, inputType: c.inputType ?? null, selector: c.selector, href: c.href ?? null,
-        visible: c.visible, risk: c.risk ?? null, aliases: c.aliases ?? [], hits: json(c.hits), status: c.status ?? 'ok', box: json(c.box) }))
+        visible: c.visible, risk: c.risk ?? null, aliases: c.aliases ?? [], hits: json(c.hits), status: c.status ?? 'ok', box: json(c.box),
+        locators: c.locators ?? [], samples: c.samples ?? [], count: c.count ?? null }))
     });
     await this.run('UNWIND $links AS l MATCH (a:Action {id: l.id}), (t:Page {url: l.to}) MERGE (a)-[:NAVIGATES_TO]->(t)',
       { links: Object.values(d.controls).filter(c => c.navigatesTo).map(c => ({ id: c.id, to: c.navigatesTo })) });
@@ -133,11 +149,19 @@ export class GraphDbStore implements MapStore {
     await this.run(`UNWIND $edges AS e MATCH (a:State {id: e.from}), (b:State {id: e.to}) MERGE (a)-[r:ACTION {id: e.id}]->(b)
       SET r.actionId = e.actionId, r.kind = e.kind, r.risk = e.risk, r.n = e.n, r.s = e.s, r.fails = e.fails, r.reliability = e.reliability, r.cost = e.cost, r.status = e.status`,
       { edges: Object.values(d.edges) });
+    await this.saveAreas(origin, Object.values(d.areas || {}));
+  }
+
+  private async saveAreas(origin: string, areas: AppArea[]) {
+    await this.run('MATCH (:App {origin: $origin})-[:HAS_AREA]->(ar:Area) DETACH DELETE ar', { origin });
+    await this.run(`UNWIND $areas AS x MATCH (a:App {origin: $origin}) CREATE (ar:Area {id: x.id}) SET ar.name = x.name, ar.summary = x.summary, ar.medoid = x.medoid
+      MERGE (a)-[:HAS_AREA]->(ar) WITH ar, x UNWIND x.pageIds AS u MATCH (p:Page {url: u}) MERGE (ar)-[:CONTAINS]->(p)`,
+      { origin, areas: areas.map(a => ({ id: `${origin}#${a.id}`, name: a.name, summary: a.summary ?? null, medoid: a.medoid ?? null, pageIds: a.pageIds })) });
   }
 
   /** Removes a site's agent map (App + its pages' states). Pages/sections/actions are kept for other tools. */
   async forget(url: string): Promise<void> {
-    await this.run('MATCH (a:App {origin: $origin}) OPTIONAL MATCH (a)-[:HAS_PAGE]->(:Page)<-[:STATE_OF]-(s:State) DETACH DELETE s, a', { origin: originOf(url) });
+    await this.run('MATCH (a:App {origin: $origin}) OPTIONAL MATCH (a)-[:HAS_PAGE]->(:Page)<-[:STATE_OF]-(s:State) OPTIONAL MATCH (a)-[:HAS_AREA]->(ar:Area) DETACH DELETE s, ar, a', { origin: originOf(url) });
   }
 
   async close(): Promise<void> {

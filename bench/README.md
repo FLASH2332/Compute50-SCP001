@@ -40,6 +40,15 @@ AGENT_MAX_TOOL_CALLS=15
 AGENT_MAX_MS=120000
 ```
 
+> **Use a separate Memgraph for the benchmark.** Loading a snapshot (`graph/load.ts`) empties the whole database
+> first. The demo and onboarding agents (`src/agent/`) keep every site's graph in the Memgraph on `NEO4J_URI`, so
+> point the benchmark at its own instance:
+>
+> ```bash
+> docker run -d --name compute50-bench-memgraph -p 7688:7687 memgraph/memgraph-mage
+> MEMGRAPH_URI=bolt://localhost:7688
+> ```
+
 ## Use
 
 ```bash

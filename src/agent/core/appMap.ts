@@ -20,6 +20,28 @@ export interface AppPage {
   url: string;
   title: string;
   template: string;          // URL template: /invoice/123 → /invoice/{id}
+  // From the graph builder's analysis (new_graph_base enrich), when present
+  rank?: number;             // PageRank
+  betweenness?: number;
+  areaId?: string;           // the Area this page belongs to
+  reachable?: boolean;
+  deadEnd?: boolean;
+}
+
+/** A named part of the app (a community of pages), from the graph builder. */
+export interface AppArea {
+  id: string;
+  name: string;
+  summary?: string;
+  pageIds: string[];
+  medoid?: string;           // its most central page
+}
+
+/** What the site is for, from the graph builder's bootstrap (one model call). */
+export interface AppProfile {
+  purpose?: string;
+  size?: string;
+  flows?: string[];
 }
 
 /** A part of a page a visitor sees (header, nav, main, a titled block, a dialog...). */
@@ -50,6 +72,9 @@ export interface Control {
   hits?: Record<string, number>; // locator → times it found this control
   status?: 'ok' | 'missing';
   box?: Box;
+  locators?: string[];       // from the graph builder: role=…|name=…, testid=…, css=…, text=…
+  samples?: string[];        // list templates: texts of a few items
+  count?: number;            // list templates: how many items
 }
 
 export interface UiState {
@@ -89,6 +114,8 @@ export interface AppMapData {
   pages: Record<string, AppPage>;
   sections: Record<string, AppSection>;
   controls: Record<string, Control>;
+  areas: Record<string, AppArea>;
+  app?: AppProfile;
   states: Record<string, UiState>;
   edges: Record<string, ActionEdge>;
 }
@@ -123,7 +150,8 @@ export class AppMap {
   data: AppMapData;
 
   constructor(data?: Partial<AppMapData>) {
-    this.data = { source: 'empty', startUrl: '', pages: {}, sections: {}, controls: {}, states: {}, edges: {}, ...data };
+    this.data = { source: 'empty', startUrl: '', pages: {}, sections: {}, controls: {}, areas: {}, states: {}, edges: {}, ...data };
+    this.data.areas ??= {};
   }
 
   static load(file: string): AppMap {
@@ -137,6 +165,8 @@ export class AppMap {
   get pages() { return this.data.pages; }
   get controls() { return this.data.controls; }
   get sections() { return this.data.sections; }
+  get areas() { return this.data.areas; }
+  get app() { return this.data.app; }
   get states() { return this.data.states; }
   get edges() { return this.data.edges; }
   get startUrl() { return this.data.startUrl; }
